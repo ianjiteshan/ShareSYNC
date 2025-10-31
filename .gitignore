@@ -1,0 +1,37 @@
+# Mac OS system files
+.DS_Store
+
+# --- Backend (Python) ---
+
+# Python virtual environment
+# The slash at the end means it's a directory
+/backend/venv/
+
+# Secret .env files
+# The slash at the beginning anchors it to the backend folder
+/backend/.env
+/backend/.env.*
+
+# Local Database file
+/backend/app.db
+
+# Python cache
+__pycache__/
+*.pyc
+
+# --- Frontend (Node.js) ---
+
+# Node.js dependencies
+/frontend/node_modules/
+
+# Secret .env files
+/frontend/.env
+/frontend/.env.*
+
+# Production build output
+/frontend/build/
+/frontend/dist/
+
+# Debug log files
+npm-debug.log*
+yarn-error.log
