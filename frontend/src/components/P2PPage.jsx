@@ -1,356 +1,389 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Card, CardContent } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Progress } from '@/components/ui/progress'
-import { 
-  ArrowLeft, 
-  Wifi, 
-  Users, 
-  Upload, 
-  Download, 
-  File, 
-  X, 
-  Loader2,
-  WifiOff,
-  RefreshCw
-} from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
-import { cn } from '@/lib/utils'
+import React, { useState, useEffect, useRef } from 'react';
+import { motion } from 'framer-motion';
+import { ArrowLeft, Wifi, Users, Upload, Download, AlertCircle, CheckCircle, Clock } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import useP2P from '../hooks/useP2P';
 
-function formatFileSize(bytes) {
-  if (bytes === 0) return '0 Bytes'
-  const k = 1024
-  const sizes = ['Bytes', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
-}
+const P2PPage = () => {
+  const {
+    isConnected,
+    peers,
+    sessionId,
+    connectionStatus,
+    transferProgress,
+    error,
+    connectToPeer,
+    sendFileToPeer,
+    disconnect,
+    deviceName
+  } = useP2P();
 
-export default function P2PPage() {
-  const navigate = useNavigate()
-  const [isConnected, setIsConnected] = useState(false)
-  const [peers, setPeers] = useState([])
-  const [selectedFile, setSelectedFile] = useState(null)
-  const [isDragOver, setIsDragOver] = useState(false)
-  const [transferProgress, setTransferProgress] = useState(0)
-  const [isTransferring, setIsTransferring] = useState(false)
-  const [connectionStatus, setConnectionStatus] = useState('connecting')
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef(null);
+  const [showTransferModal, setShowTransferModal] = useState(false);
 
-  // Simulate connection process
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsConnected(true)
-      setConnectionStatus('connected')
-      // Simulate some peers
-      setPeers([
-        { id: '1', name: 'John\'s iPhone', type: 'mobile', status: 'online' },
-        { id: '2', name: 'Sarah\'s MacBook', type: 'desktop', status: 'online' },
-        { id: '3', name: 'Office PC', type: 'desktop', status: 'idle' }
-      ])
-    }, 2000)
+  // Handle file selection
+  const handleFileSelect = (files) => {
+    const fileArray = Array.from(files);
+    setSelectedFiles(fileArray);
+  };
 
-    return () => clearTimeout(timer)
-  }, [])
-
-  const handleDragOver = useCallback((e) => {
-    e.preventDefault()
-    setIsDragOver(true)
-  }, [])
-
-  const handleDragLeave = useCallback((e) => {
-    e.preventDefault()
-    setIsDragOver(false)
-  }, [])
-
-  const handleDrop = useCallback((e) => {
-    e.preventDefault()
-    setIsDragOver(false)
-    const files = e.dataTransfer.files
-    if (files.length > 0) {
-      setSelectedFile(files[0])
+  // Handle drag and drop
+  const handleDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true);
+    } else if (e.type === 'dragleave') {
+      setDragActive(false);
     }
-  }, [])
+  };
 
-  const handleFileSelect = (e) => {
-    const files = e.target.files
-    if (files && files.length > 0) {
-      setSelectedFile(files[0])
-    }
-  }
-
-  const handleSendFile = async (peerId) => {
-    if (!selectedFile) return
-
-    setIsTransferring(true)
-    setTransferProgress(0)
-
-    // Simulate file transfer
-    const interval = setInterval(() => {
-      setTransferProgress(prev => {
-        if (prev >= 100) {
-          clearInterval(interval)
-          setTimeout(() => {
-            setIsTransferring(false)
-            setSelectedFile(null)
-            setTransferProgress(0)
-            alert('File sent successfully! (This is a demo)')
-          }, 500)
-          return 100
-        }
-        return prev + 5
-      })
-    }, 100)
-  }
-
-  const reconnect = () => {
-    setConnectionStatus('connecting')
-    setIsConnected(false)
-    setPeers([])
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
     
-    setTimeout(() => {
-      setIsConnected(true)
-      setConnectionStatus('connected')
-      setPeers([
-        { id: '1', name: 'John\'s iPhone', type: 'mobile', status: 'online' },
-        { id: '2', name: 'Sarah\'s MacBook', type: 'desktop', status: 'online' }
-      ])
-    }, 2000)
-  }
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileSelect(e.dataTransfer.files);
+    }
+  };
+
+  // Send file to selected peer
+  const handleSendFile = async (peerId, file) => {
+    try {
+      // First connect to peer if not already connected
+      const connected = await connectToPeer(peerId);
+      if (!connected) {
+        alert('Failed to connect to peer');
+        return;
+      }
+
+      // Send the file
+      const success = await sendFileToPeer(peerId, file);
+      if (success) {
+        setShowTransferModal(true);
+      } else {
+        alert('Failed to send file');
+      }
+    } catch (error) {
+      console.error('Error sending file:', error);
+      alert('Error sending file');
+    }
+  };
+
+  // Format file size
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  // Get connection status color
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'connected': return 'text-green-500';
+      case 'connecting': return 'text-yellow-500';
+      case 'disconnected': return 'text-red-500';
+      default: return 'text-gray-500';
+    }
+  };
+
+  // Get connection status text
+  const getStatusText = (status) => {
+    switch (status) {
+      case 'connected': return 'Connected to P2P network';
+      case 'connecting': return 'Connecting to P2P network...';
+      case 'disconnected': return 'Disconnected from P2P network';
+      default: return 'Unknown status';
+    }
+  };
 
   return (
-    <div className="min-h-screen w-full relative">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
       {/* Background Effects */}
-      <div className="fixed inset-0 -z-50">
-        <div className="absolute inset-0 opacity-40" 
-             style={{ 
-               backgroundImage: "radial-gradient(closest-corner at 120px 36px, rgba(255, 1, 111, 0.19), rgba(255, 1, 111, 0.08)), linear-gradient(rgb(63, 51, 69) 15%, rgb(7, 3, 9))" 
-             }}>
-        </div>
-        <div className="absolute inset-0 bg-noise"></div>
-        <div className="absolute inset-0 bg-black/40"></div>
-      </div>
-
-      <div className="relative z-10 max-w-4xl w-full mx-auto p-6 pt-12">
+      <div className="absolute inset-0 bg-dotted-pattern opacity-20"></div>
+      
+      <div className="relative z-10 container mx-auto px-4 py-8">
         {/* Header */}
-        <div className="mb-8">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => navigate('/')}
-            className="mb-4 text-white/70 hover:text-white hover:bg-white/10"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            Back to Home
-          </Button>
-          
-          <div className="text-center">
-            <h1 className="text-3xl font-light text-white mb-2">P2P File Sharing</h1>
-            <p className="text-gray-400 text-sm">
-              Share files directly with nearby devices
-            </p>
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center justify-between mb-8"
+        >
+          <div className="flex items-center gap-4">
+            <Link
+              to="/"
+              className="flex items-center gap-2 text-white/80 hover:text-white transition-colors"
+            >
+              <ArrowLeft className="w-5 h-5" />
+              <span>Back to Home</span>
+            </Link>
           </div>
-        </div>
+          
+          <div className="flex items-center gap-3">
+            <div className={`flex items-center gap-2 ${getStatusColor(connectionStatus)}`}>
+              <Wifi className="w-5 h-5" />
+              <span className="text-sm font-medium">{getStatusText(connectionStatus)}</span>
+            </div>
+          </div>
+        </motion.div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Connection Status */}
-          <Card className="bg-black/40 border-gray-700/50 backdrop-blur-sm">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-white">Connection Status</h2>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={reconnect}
-                  className="text-gray-400 hover:text-white hover:bg-gray-800/50"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                </Button>
-              </div>
-
-              <div className="flex items-center gap-3 mb-4">
-                {connectionStatus === 'connecting' ? (
-                  <>
-                    <Loader2 className="w-5 h-5 text-yellow-400 animate-spin" />
-                    <span className="text-yellow-400">Connecting to network...</span>
-                  </>
-                ) : isConnected ? (
-                  <>
-                    <Wifi className="w-5 h-5 text-green-400" />
-                    <span className="text-green-400">Connected to local network</span>
-                  </>
-                ) : (
-                  <>
-                    <WifiOff className="w-5 h-5 text-red-400" />
-                    <span className="text-red-400">Not connected</span>
-                  </>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2">
-                <Users className="w-4 h-4 text-gray-400" />
-                <span className="text-gray-300 text-sm">
-                  {peers.length} device{peers.length !== 1 ? 's' : ''} found
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* File Selection */}
-          <Card className="bg-black/40 border-gray-700/50 backdrop-blur-sm">
-            <CardContent className="p-6">
-              <h2 className="text-lg font-semibold text-white mb-4">Select File</h2>
+        {/* Main Content */}
+        <div className="grid lg:grid-cols-2 gap-8">
+          {/* Left Column - File Upload */}
+          <motion.div
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.2 }}
+            className="space-y-6"
+          >
+            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
+              <h2 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
+                <Upload className="w-6 h-6" />
+                Select Files to Share
+              </h2>
               
+              {/* File Drop Zone */}
               <div
-                className={cn(
-                  'border-2 border-dashed rounded-lg p-6 text-center transition-all duration-200 cursor-pointer',
-                  isDragOver
-                    ? 'border-pink-400 bg-pink-500/10'
-                    : 'border-gray-600 hover:border-gray-500',
-                  selectedFile && 'border-pink-500 bg-pink-500/10'
-                )}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
+                className={`border-2 border-dashed rounded-xl p-8 text-center transition-all duration-300 ${
+                  dragActive
+                    ? 'border-blue-400 bg-blue-400/10'
+                    : 'border-white/30 hover:border-white/50'
+                }`}
+                onDragEnter={handleDrag}
+                onDragLeave={handleDrag}
+                onDragOver={handleDrag}
                 onDrop={handleDrop}
-                onClick={() => document.getElementById('p2pFileInput')?.click()}
+                onClick={() => fileInputRef.current?.click()}
               >
+                <Upload className="w-12 h-12 text-white/60 mx-auto mb-4" />
+                <p className="text-white/80 mb-2">
+                  Drag and drop files here, or click to select
+                </p>
+                <p className="text-white/60 text-sm">
+                  Any file type, unlimited size for P2P sharing
+                </p>
+                
                 <input
-                  id="p2pFileInput"
+                  ref={fileInputRef}
                   type="file"
+                  multiple
                   className="hidden"
-                  onChange={handleFileSelect}
-                  disabled={isTransferring}
+                  onChange={(e) => handleFileSelect(e.target.files)}
                 />
-
-                {selectedFile ? (
-                  <div className="space-y-3">
-                    <div className="w-10 h-10 bg-pink-500/20 rounded-lg flex items-center justify-center mx-auto">
-                      <File className="w-5 h-5 text-pink-400" />
-                    </div>
-                    <div>
-                      <p className="font-medium text-white text-sm">
-                        {selectedFile.name}
-                      </p>
-                      <p className="text-gray-400 text-xs mt-1">
-                        {formatFileSize(selectedFile.size)}
-                      </p>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setSelectedFile(null)
-                      }}
-                      disabled={isTransferring}
-                      className="text-gray-400 hover:text-white hover:bg-gray-800/50"
-                    >
-                      <X className="w-3 h-3 mr-1" />
-                      Remove
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="w-10 h-10 bg-gray-700/50 rounded-lg flex items-center justify-center mx-auto">
-                      <Upload className="w-5 h-5 text-gray-400" />
-                    </div>
-                    <div>
-                      <p className="text-white text-sm mb-1">
-                        Drop file here
-                      </p>
-                      <p className="text-gray-400 text-xs">
-                        or click to browse
-                      </p>
-                    </div>
-                  </div>
-                )}
               </div>
-            </CardContent>
-          </Card>
-        </div>
 
-        {/* Transfer Progress */}
-        {isTransferring && (
-          <Card className="bg-black/40 border-gray-700/50 backdrop-blur-sm mt-6">
-            <CardContent className="p-6">
-              <div className="flex justify-between items-center mb-3">
-                <span className="text-gray-400 text-sm">Transferring file...</span>
-                <span className="text-white text-sm font-medium">
-                  {Math.round(transferProgress)}%
-                </span>
-              </div>
-              <Progress value={transferProgress} className="h-2 bg-gray-700/50" />
-            </CardContent>
-          </Card>
-        )}
+              {/* Selected Files */}
+              {selectedFiles.length > 0 && (
+                <div className="mt-6">
+                  <h3 className="text-lg font-semibold text-white mb-3">Selected Files</h3>
+                  <div className="space-y-2">
+                    {selectedFiles.map((file, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center justify-between bg-white/5 rounded-lg p-3"
+                      >
+                        <div>
+                          <p className="text-white font-medium">{file.name}</p>
+                          <p className="text-white/60 text-sm">{formatFileSize(file.size)}</p>
+                        </div>
+                        <button
+                          onClick={() => setSelectedFiles(files => files.filter((_, i) => i !== index))}
+                          className="text-red-400 hover:text-red-300 transition-colors"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
 
-        {/* Available Devices */}
-        <Card className="bg-black/40 border-gray-700/50 backdrop-blur-sm mt-6">
-          <CardContent className="p-6">
-            <h2 className="text-lg font-semibold text-white mb-4">Available Devices</h2>
-            
-            {peers.length === 0 ? (
-              <div className="text-center py-8">
-                <Users className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-                <p className="text-gray-400">
-                  {connectionStatus === 'connecting' 
-                    ? 'Searching for devices...' 
-                    : 'No devices found on the network'
-                  }
+            {/* Device Info */}
+            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
+              <h3 className="text-lg font-semibold text-white mb-3">Your Device</h3>
+              <div className="space-y-2">
+                <p className="text-white/80">
+                  <span className="font-medium">Device Name:</span> {deviceName}
+                </p>
+                <p className="text-white/80">
+                  <span className="font-medium">Session ID:</span> {sessionId || 'Not connected'}
+                </p>
+                <p className="text-white/80">
+                  <span className="font-medium">Status:</span> {isConnected ? 'Online' : 'Offline'}
                 </p>
               </div>
-            ) : (
-              <div className="space-y-3">
-                {peers.map((peer) => (
-                  <div
-                    key={peer.id}
-                    className="flex items-center justify-between p-4 bg-gray-800/30 rounded-lg border border-gray-700/50"
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-gray-700/50 rounded-lg flex items-center justify-center">
-                        {peer.type === 'mobile' ? (
-                          <div className="w-5 h-5 bg-gray-400 rounded-sm"></div>
-                        ) : (
-                          <div className="w-5 h-5 bg-gray-400 rounded"></div>
-                        )}
-                      </div>
-                      <div>
-                        <p className="text-white font-medium">{peer.name}</p>
-                        <div className="flex items-center gap-2">
-                          <Badge
-                            variant={peer.status === 'online' ? 'default' : 'secondary'}
-                            className={cn(
-                              'text-xs',
-                              peer.status === 'online' 
-                                ? 'bg-green-500/20 text-green-400 border-green-500/30' 
-                                : 'bg-gray-500/20 text-gray-400 border-gray-500/30'
-                            )}
-                          >
-                            {peer.status}
-                          </Badge>
+            </div>
+          </motion.div>
+
+          {/* Right Column - Available Peers */}
+          <motion.div
+            initial={{ opacity: 0, x: 20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.4 }}
+            className="space-y-6"
+          >
+            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
+              <h2 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
+                <Users className="w-6 h-6" />
+                Available Devices ({peers.length})
+              </h2>
+
+              {/* Error Display */}
+              {error && (
+                <div className="mb-4 p-3 bg-red-500/20 border border-red-500/30 rounded-lg flex items-center gap-2">
+                  <AlertCircle className="w-5 h-5 text-red-400" />
+                  <span className="text-red-200">{error}</span>
+                </div>
+              )}
+
+              {/* Connection Status */}
+              {!isConnected && (
+                <div className="mb-4 p-3 bg-yellow-500/20 border border-yellow-500/30 rounded-lg flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-yellow-400" />
+                  <span className="text-yellow-200">Connecting to P2P network...</span>
+                </div>
+              )}
+
+              {/* Peers List */}
+              {isConnected && peers.length === 0 && (
+                <div className="text-center py-8">
+                  <Users className="w-16 h-16 text-white/30 mx-auto mb-4" />
+                  <p className="text-white/60">No other devices found on the network</p>
+                  <p className="text-white/40 text-sm mt-2">
+                    Make sure other devices are on the same network and have ShareSync open
+                  </p>
+                </div>
+              )}
+
+              {peers.length > 0 && (
+                <div className="space-y-3">
+                  {peers.map((peer) => (
+                    <div
+                      key={peer.session_id}
+                      className="bg-white/5 rounded-xl p-4 border border-white/10 hover:bg-white/10 transition-all duration-300"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="text-white font-semibold">{peer.device_name}</h3>
+                          <p className="text-white/60 text-sm">
+                            Status: {peer.connectionState || 'Available'}
+                          </p>
+                          <p className="text-white/40 text-xs">
+                            Joined: {new Date(peer.joined_at).toLocaleTimeString()}
+                          </p>
+                        </div>
+                        
+                        <div className="flex flex-col gap-2">
+                          {selectedFiles.length > 0 ? (
+                            <div className="space-y-1">
+                              {selectedFiles.map((file, index) => (
+                                <button
+                                  key={index}
+                                  disabled={!peer.dataChannelReady}
+                                  onClick={() => handleSendFile(peer.session_id, file)}
+                                  className={`bg-gradient-to-r from-blue-500 to-purple-600 text-white px-3 py-1 rounded-lg text-sm font-medium transition-all duration-300 flex items-center gap-1 ${
+                                    !peer.dataChannelReady ? 'opacity-50 cursor-not-allowed' : 'hover:from-blue-600 hover:to-purple-700'
+                                  }`}
+                                >
+                                  <Upload className="w-3 h-3" />
+                                  {peer.dataChannelReady ? `Send ${file.name.substring(0, 15)}...` : 'Connecting...'}
+                                
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-white/40 text-sm">Select files to send</span>
+                          )}
                         </div>
                       </div>
-                    </div>
-                    
-                    <Button
-                      size="sm"
-                      onClick={() => handleSendFile(peer.id)}
-                      disabled={!selectedFile || isTransferring || peer.status !== 'online'}
-                      className={cn(
-                        'bg-pink-500/10 text-pink-400 border border-pink-500/30 hover:bg-pink-500/20',
-                        'disabled:opacity-50 disabled:cursor-not-allowed'
-                      )}
-                    >
-                      <Upload className="w-4 h-4 mr-2" />
-                      Send
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  )
-}
 
+                      {/* Transfer Progress */}
+                      {transferProgress[peer.session_id] && (
+                        <div className="mt-3 p-2 bg-white/5 rounded-lg">
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-white/80 text-sm">
+                              Sending: {transferProgress[peer.session_id].fileName}
+                            </span>
+                            <span className="text-white/60 text-sm">
+                              {Math.round(transferProgress[peer.session_id].progress)}%
+                            </span>
+                          </div>
+                          <div className="w-full bg-white/10 rounded-full h-2">
+                            <div
+                              className="bg-gradient-to-r from-blue-500 to-purple-600 h-2 rounded-full transition-all duration-300"
+                              style={{ width: `${transferProgress[peer.session_id].progress}%` }}
+                            ></div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Instructions */}
+            <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20">
+              <h3 className="text-lg font-semibold text-white mb-3">How P2P Sharing Works</h3>
+              <div className="space-y-2 text-white/80 text-sm">
+                <div className="flex items-start gap-2">
+                  <CheckCircle className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
+                  <span>Files are sent directly between devices</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
+                  <span>No file size limits or server storage</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
+                  <span>End-to-end encrypted connections</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
+                  <span>Works on the same local network</span>
+                </div>
+                <div className="flex items-start gap-2">
+                  <CheckCircle className="w-4 h-4 text-green-400 mt-0.5 flex-shrink-0" />
+                  <span>No registration or login required</span>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      </div>
+
+      {/* Transfer Modal */}
+      {showTransferModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20 max-w-md w-full mx-4"
+          >
+            <div className="text-center">
+              <CheckCircle className="w-16 h-16 text-green-400 mx-auto mb-4" />
+              <h3 className="text-xl font-bold text-white mb-2">Transfer Started!</h3>
+              <p className="text-white/80 mb-4">
+                Your file is being sent via P2P connection. The transfer will continue in the background.
+              </p>
+              <button
+                onClick={() => setShowTransferModal(false)}
+                className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-6 py-2 rounded-lg font-medium hover:from-blue-600 hover:to-purple-700 transition-all duration-300"
+              >
+                Continue
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default P2PPage;

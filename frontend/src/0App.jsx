@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { ThemeProvider } from './components/ThemeProvider'
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './hooks/useAuth.jsx'
 import HomePage from './components/HomePage'
@@ -15,10 +14,9 @@ import './App.css'
 
 function App() {
   return (
-    <ThemeProvider defaultTheme="dark" storageKey="vite-ui-theme">
-      <AuthProvider>
-        <Router>
-        <div className="min-h-screen flex flex-col">
+    <AuthProvider>
+      <Router>
+        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex flex-col">
           {/* Background Effects */}
           <div className="fixed inset-0 -z-50">
             <div className="absolute inset-0 opacity-40" 
@@ -26,6 +24,7 @@ function App() {
                    backgroundImage: "radial-gradient(closest-corner at 120px 36px, rgba(255, 1, 111, 0.19), rgba(255, 1, 111, 0.08)), linear-gradient(rgb(63, 51, 69) 15%, rgb(7, 3, 9))" 
                  }}>
             </div>
+            <div className="absolute inset-0 bg-black/40"></div>
           </div>
 
           {/* Main Content */}
@@ -69,7 +68,6 @@ function App() {
         </div>
       </Router>
     </AuthProvider>
-    </ThemeProvider>
   )
 }
 

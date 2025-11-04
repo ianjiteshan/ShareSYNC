@@ -2,7 +2,7 @@ import os
 import sys
 import uuid
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 # DON'T CHANGE THIS !!!
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -35,6 +35,12 @@ from src.routes.security import security_bp
 
 app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'static'))
 
+# Get the absolute path for the 'src' directory
+basedir = os.path.abspath(os.path.dirname(__file__))
+# Define the path for the database directory
+db_dir = os.path.join(basedir, 'database')
+# Create the directory if it doesn't exist
+os.makedirs(db_dir, exist_ok=True)
 # Configuration
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'sharesync.db')}")
@@ -87,194 +93,186 @@ rooms = {}
 # Enhanced P2P WebSocket handlers
 @socketio.on('connect')
 def handle_connect():
-    peer_id = str(uuid.uuid4())
-    device_info = request.args.get('device_info', 'Unknown Device')
-    
-    connected_peers[request.sid] = {
-        'id': peer_id,
-        'name': device_info,
-        'status': 'online',
-        'connected_at': datetime.utcnow().isoformat(),
-        'capabilities': {
-            'webrtc': True,
-            'file_transfer': True,
-            'text_transfer': True
-        }
-    }
-    
-    print(f'Peer connected: {peer_id} ({device_info})')
-    emit('peer_id', {'peer_id': peer_id, 'device_info': device_info})
-    
-    # Broadcast peer count to all clients
-    emit('peer_count', {'count': len(connected_peers)}, broadcast=True)
+    """
+    Client connected to the server.
+    We don't do much here, we wait for them to 'join_p2p'.
+    """
+    print(f"Client connected: {request.sid}")
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    if request.sid in connected_peers:
-        peer = connected_peers[request.sid]
-        print(f'Peer disconnected: {peer["id"]}')
-        
-        # Notify other peers in the same room
-        for room_id in rooms:
+    """
+    Client disconnected from the server.
+    """
+    print(f"Client disconnected: {request.sid}")
+    
+    peer_data = connected_peers.pop(request.sid, None)
+    
+    if peer_data:
+        room_id = peer_data.get('room_id')
+        if room_id and room_id in rooms:
+            # Remove peer from the room list
             if request.sid in rooms[room_id]:
                 rooms[room_id].remove(request.sid)
-                socketio.emit('peer_left', {'peer_id': peer['id']}, room=room_id)
-                
-        del connected_peers[request.sid]
-        
-        # Broadcast updated peer count
-        emit('peer_count', {'count': len(connected_peers)}, broadcast=True)
 
-@socketio.on('join_room')
-def handle_join_room(data):
+            # Notify all *other* peers in that room
+            emit('peer_left', 
+                 {'session_id': request.sid}, 
+                 room=room_id)
+            
+            print(f"Peer {request.sid} left room {room_id}")
+
+@socketio.on('join_p2p')
+def handle_join_p2p(data):
+    """
+    This is the event your useP2P.js client sends.
+    It replaces your old 'join_room'.
+    """
+    device_name = data.get('device_name', 'Unknown Device')
     room_id = data.get('room_id', 'default')
+    
     join_room(room_id)
     
+    # Store peer info
+    peer_info = {
+        'session_id': request.sid,
+        'device_name': device_name,
+        'room_id': room_id,
+        'joined_at': datetime.now(timezone.utc).isoformat()
+    }
+    connected_peers[request.sid] = peer_info
+    
+    # Add to room list
     if room_id not in rooms:
         rooms[room_id] = []
     rooms[room_id].append(request.sid)
     
-    # Send list of peers in the room
-    peers_in_room = []
-    for sid in rooms[room_id]:
-        if sid in connected_peers and sid != request.sid:
-            peer_data = connected_peers[sid].copy()
-            peer_data['sid'] = sid  # Add session ID for targeting
-            peers_in_room.append(peer_data)
-    
-    emit('peers_list', {'peers': peers_in_room, 'room_id': room_id})
-    
-    # Notify others about new peer
-    if request.sid in connected_peers:
-        peer_data = connected_peers[request.sid].copy()
-        peer_data['sid'] = request.sid
-        emit('peer_joined', peer_data, room=room_id, include_self=False)
+    print(f"Peer {request.sid} ({device_name}) joined room {room_id}")
 
-@socketio.on('leave_room')
-def handle_leave_room(data):
-    room_id = data.get('room_id', 'default')
-    leave_room(room_id)
+    # 1. Get list of all *other* peers in the same room
+    other_peers_in_room = []
+    if room_id in rooms:
+        for sid in rooms[room_id]:
+            if sid != request.sid and sid in connected_peers:
+                other_peers_in_room.append(connected_peers[sid])
     
-    if room_id in rooms and request.sid in rooms[room_id]:
-        rooms[room_id].remove(request.sid)
-        
-        # Notify others about peer leaving
-        if request.sid in connected_peers:
-            emit('peer_left', {'peer_id': connected_peers[request.sid]['id']}, room=room_id)
+    # 2. Emit 'p2p_joined' *only* to the sender (this is what your client expects)
+    emit('p2p_joined', {
+        'session_id': request.sid,
+        'peers': other_peers_in_room
+    })
+    
+    # 3. Emit 'peer_joined' to all *other* clients in the room
+    emit('peer_joined', peer_info, room=room_id, include_self=False)
+
 
 @socketio.on('webrtc_offer')
 def handle_webrtc_offer(data):
-    target_peer = data.get('target_peer')
-    offer = data.get('offer')
+    """
+    Forward the offer from sender to target.
+    We just pass the data along.
+    """
+    target_session = data.get('target_session')
+    if not target_session:
+        return
+
+    print(f"Relaying WebRTC offer from {request.sid} to {target_session}")
     
-    # Find target peer's socket ID
-    target_sid = None
-    for sid, peer in connected_peers.items():
-        if peer['id'] == target_peer:
-            target_sid = sid
-            break
-    
-    if target_sid:
-        emit('webrtc_offer', {
-            'from_peer': connected_peers[request.sid]['id'],
-            'offer': offer,
-            'timestamp': datetime.utcnow().isoformat()
-        }, room=target_sid)
+    emit('webrtc_offer', {
+        'sender_session': request.sid,
+        'offer': data.get('offer')
+    }, room=target_session)
 
 @socketio.on('webrtc_answer')
 def handle_webrtc_answer(data):
-    target_peer = data.get('target_peer')
-    answer = data.get('answer')
-    
-    # Find target peer's socket ID
-    target_sid = None
-    for sid, peer in connected_peers.items():
-        if peer['id'] == target_peer:
-            target_sid = sid
-            break
-    
-    if target_sid:
-        emit('webrtc_answer', {
-            'from_peer': connected_peers[request.sid]['id'],
-            'answer': answer,
-            'timestamp': datetime.utcnow().isoformat()
-        }, room=target_sid)
+    """
+    Forward the answer from target back to sender.
+    We just pass the data along.
+    """
+    target_session = data.get('target_session')
+    if not target_session:
+        return
 
-@socketio.on('webrtc_ice_candidate')
+    print(f"Relaying WebRTC answer from {request.sid} to {target_session}")
+    
+    emit('webrtc_answer', {
+        'sender_session': request.sid,
+        'answer': data.get('answer')
+    }, room=target_session)
+
+@socketio.on('ice_candidate')
 def handle_ice_candidate(data):
-    target_peer = data.get('target_peer')
-    candidate = data.get('candidate')
-    
-    # Find target peer's socket ID
-    target_sid = None
-    for sid, peer in connected_peers.items():
-        if peer['id'] == target_peer:
-            target_sid = sid
-            break
-    
-    if target_sid:
-        emit('webrtc_ice_candidate', {
-            'from_peer': connected_peers[request.sid]['id'],
-            'candidate': candidate,
-            'timestamp': datetime.utcnow().isoformat()
-        }, room=target_sid)
+    """
+    Forward the ICE candidate to the other peer.
+    We just pass the data along.
+    """
+    target_session = data.get('target_session')
+    if not target_session:
+        return
 
-@socketio.on('file_transfer_request')
-def handle_file_transfer_request(data):
-    target_peer = data.get('target_peer')
-    file_info = data.get('file_info')
+    # print(f"Relaying ICE candidate from {request.sid} to {target_session}") # This is too noisy
     
-    # Find target peer's socket ID
-    target_sid = None
-    for sid, peer in connected_peers.items():
-        if peer['id'] == target_peer:
-            target_sid = sid
-            break
+    emit('ice_candidate', {
+        'sender_session': request.sid,
+        'candidate': data.get('candidate')
+    }, room=target_session)
     
-    if target_sid:
-        emit('file_transfer_request', {
-            'from_peer': connected_peers[request.sid]['id'],
-            'file_info': file_info,
-            'timestamp': datetime.utcnow().isoformat()
-        }, room=target_sid)
+# @socketio.on('file_transfer_request')
+# def handle_file_transfer_request(data):
+#     target_peer = data.get('target_peer')
+#     file_info = data.get('file_info')
+    
+#     # Find target peer's socket ID
+#     target_sid = None
+#     for sid, peer in connected_peers.items():
+#         if peer['id'] == target_peer:
+#             target_sid = sid
+#             break
+    
+#     if target_sid:
+#         emit('file_transfer_request', {
+#             'from_peer': connected_peers[request.sid]['id'],
+#             'file_info': file_info,
+#             'timestamp': datetime.utcnow().isoformat()
+#         }, room=target_sid)
 
-@socketio.on('file_transfer_response')
-def handle_file_transfer_response(data):
-    target_peer = data.get('target_peer')
-    accepted = data.get('accepted', False)
+# @socketio.on('file_transfer_response')
+# def handle_file_transfer_response(data):
+#     target_peer = data.get('target_peer')
+#     accepted = data.get('accepted', False)
     
-    # Find target peer's socket ID
-    target_sid = None
-    for sid, peer in connected_peers.items():
-        if peer['id'] == target_peer:
-            target_sid = sid
-            break
+#     # Find target peer's socket ID
+#     target_sid = None
+#     for sid, peer in connected_peers.items():
+#         if peer['id'] == target_peer:
+#             target_sid = sid
+#             break
     
-    if target_sid:
-        emit('file_transfer_response', {
-            'from_peer': connected_peers[request.sid]['id'],
-            'accepted': accepted,
-            'timestamp': datetime.utcnow().isoformat()
-        }, room=target_sid)
+#     if target_sid:
+#         emit('file_transfer_response', {
+#             'from_peer': connected_peers[request.sid]['id'],
+#             'accepted': accepted,
+#             'timestamp': datetime.utcnow().isoformat()
+#         }, room=target_sid)
 
-@socketio.on('text_message')
-def handle_text_message(data):
-    target_peer = data.get('target_peer')
-    message = data.get('message')
+# @socketio.on('text_message')
+# def handle_text_message(data):
+#     target_peer = data.get('target_peer')
+#     message = data.get('message')
     
-    # Find target peer's socket ID
-    target_sid = None
-    for sid, peer in connected_peers.items():
-        if peer['id'] == target_peer:
-            target_sid = sid
-            break
+#     # Find target peer's socket ID
+#     target_sid = None
+#     for sid, peer in connected_peers.items():
+#         if peer['id'] == target_peer:
+#             target_sid = sid
+#             break
     
-    if target_sid:
-        emit('text_message', {
-            'from_peer': connected_peers[request.sid]['id'],
-            'message': message,
-            'timestamp': datetime.utcnow().isoformat()
-        }, room=target_sid)
+#     if target_sid:
+#         emit('text_message', {
+#             'from_peer': connected_peers[request.sid]['id'],
+#             'message': message,
+#             'timestamp': datetime.utcnow().isoformat()
+#         }, room=target_sid)
 
 # Enhanced API endpoints
 @app.route('/api/health')

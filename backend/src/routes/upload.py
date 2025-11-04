@@ -1,217 +1,301 @@
 import os
 import uuid
-import json
 from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
-import boto3
-from botocore.exceptions import ClientError
+from werkzeug.utils import secure_filename
+import hashlib
+
 from .auth import require_auth
-from ..middleware.rate_limiter import upload_rate_limit, download_rate_limit, api_rate_limit
+from ..middleware.rate_limiter import api_rate_limit, upload_rate_limit
+from ..services.minio_client import minio_client
 
 upload_bp = Blueprint('upload', __name__)
 
-# Cloudflare R2 configuration (set these environment variables)
-R2_ACCOUNT_ID = os.getenv('R2_ACCOUNT_ID', 'your-account-id')
-R2_ACCESS_KEY_ID = os.getenv('R2_ACCESS_KEY_ID', 'your-access-key')
-R2_SECRET_ACCESS_KEY = os.getenv('R2_SECRET_ACCESS_KEY', 'your-secret-key')
-R2_BUCKET_NAME = os.getenv('R2_BUCKET_NAME', 'sharesync-files')
+# Configuration
+MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+ALLOWED_EXTENSIONS = {
+    'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'doc', 'docx', 'xls', 'xlsx', 
+    'ppt', 'pptx', 'zip', 'rar', '7z', 'mp3', 'mp4', 'avi', 'mov', 'wmv',
+    'flv', 'webm', 'mkv', 'wav', 'flac', 'aac', 'ogg', 'svg', 'bmp', 'tiff',
+    'ico', 'webp', 'csv', 'json', 'xml', 'html', 'css', 'js', 'py', 'java',
+    'cpp', 'c', 'h', 'php', 'rb', 'go', 'rs', 'swift', 'kt', 'scala'
+}
 
-# Initialize R2 client
-r2_client = boto3.client(
-    's3',
-    endpoint_url=f'https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com',
-    aws_access_key_id=R2_ACCESS_KEY_ID,
-    aws_secret_access_key=R2_SECRET_ACCESS_KEY,
-    region_name='auto'
-)
+def allowed_file(filename):
+    """Check if file extension is allowed"""
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# In-memory storage for file metadata (use database in production)
-file_metadata = {}
+def get_file_size(file_obj):
+    """Get file size"""
+    file_obj.seek(0, 2)  # Seek to end
+    size = file_obj.tell()
+    file_obj.seek(0)  # Reset to beginning
+    return size
 
-@upload_bp.route('/upload/presigned-url', methods=['POST'])
+@upload_bp.route('/upload', methods=['POST'])
 @require_auth
 @upload_rate_limit
-def get_presigned_upload_url():
-    """Generate presigned URL for direct upload to R2"""
+def upload_file():
+    """Upload a file to MinIO storage"""
     try:
-        data = request.get_json()
+        user_id = request.current_user_id
         
-        # Validate request data
-        if not data or 'fileName' not in data or 'fileType' not in data:
-            return jsonify({'error': 'Missing fileName or fileType'}), 400
+        # Check if file is present
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
         
-        file_name = data['fileName']
-        file_type = data['fileType']
-        file_size = data.get('fileSize', 0)
-        expiry_hours = data.get('expiryHours', 24)
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
         
-        # Generate unique file key
-        file_id = str(uuid.uuid4())
-        file_key = f"{file_id}/{file_name}"
+        # Validate file
+        if not allowed_file(file.filename):
+            return jsonify({'error': 'File type not allowed'}), 400
         
-        # Generate presigned URL for upload
-        presigned_url = r2_client.generate_presigned_url(
-            'put_object',
-            Params={
-                'Bucket': R2_BUCKET_NAME,
-                'Key': file_key,
-                'ContentType': file_type
-            },
-            ExpiresIn=3600  # 1 hour to complete upload
+        # Check file size
+        file_size = get_file_size(file)
+        if file_size > MAX_FILE_SIZE:
+            return jsonify({'error': f'File too large. Maximum size is {MAX_FILE_SIZE // (1024*1024)}MB'}), 400
+        
+        if file_size == 0:
+            return jsonify({'error': 'Empty file not allowed'}), 400
+        
+        # Get upload options
+        expiry_hours = int(request.form.get('expiry_hours', 24))
+        password = request.form.get('password', '').strip()
+        
+        # Validate expiry hours (1 hour to 7 days)
+        if expiry_hours < 1 or expiry_hours > 168:
+            return jsonify({'error': 'Expiry must be between 1 hour and 7 days'}), 400
+        
+        # Secure filename
+        filename = secure_filename(file.filename)
+        if not filename:
+            filename = f"file_{uuid.uuid4().hex[:8]}"
+        
+        # Upload to MinIO
+        upload_result = minio_client.upload_file(
+            file_obj=file,
+            filename=filename,
+            user_id=user_id,
+            expiry_hours=expiry_hours,
+            password=password if password else None
         )
         
-        # Store metadata
-        expires_at = datetime.utcnow() + timedelta(hours=expiry_hours)
-        file_metadata[file_id] = {
-            'id': file_id,
-            'key': file_key,
-            'original_name': file_name,
-            'file_type': file_type,
-            'file_size': file_size,
-            'expires_at': expires_at.isoformat(),
-            'uploaded': False,
-            'created_at': datetime.utcnow().isoformat(),
-            'user_id': request.current_user_id  # Add user ID from auth decorator
-        }
+        if not upload_result['success']:
+            return jsonify({'error': upload_result['error']}), 500
+        
+        # Generate share URL
+        share_url = f"/share/{upload_result['file_id']}"
         
         return jsonify({
-            'fileId': file_id,
-            'uploadUrl': presigned_url,
-            'key': file_key
+            'success': True,
+            'file_id': upload_result['file_id'],
+            'filename': upload_result['filename'],
+            'size': upload_result['size'],
+            'content_type': upload_result['content_type'],
+            'share_url': share_url,
+            'download_url': upload_result['download_url'],
+            'public_url': upload_result['public_url'],
+            'expiry_time': upload_result['expiry_time'],
+            'has_password': upload_result['has_password'],
+            'upload_time': upload_result['upload_time']
         })
         
-    except ClientError as e:
-        return jsonify({'error': f'R2 error: {str(e)}'}), 500
     except Exception as e:
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
+        print(f"Upload error: {e}")
+        return jsonify({'error': f'Upload failed: {str(e)}'}), 500
 
-@upload_bp.route('/upload/complete', methods=['POST'])
+@upload_bp.route('/files', methods=['GET'])
 @require_auth
 @api_rate_limit
-def complete_upload():
-    """Mark upload as complete and generate share link"""
+def list_user_files():
+    """List files uploaded by the current user"""
     try:
-        data = request.get_json()
+        user_id = request.current_user_id
+        limit = int(request.args.get('limit', 50))
         
-        if not data or 'fileId' not in data:
-            return jsonify({'error': 'Missing fileId'}), 400
+        # Validate limit
+        if limit < 1 or limit > 100:
+            limit = 50
         
-        file_id = data['fileId']
+        result = minio_client.list_user_files(user_id, limit)
         
-        if file_id not in file_metadata:
-            return jsonify({'error': 'File not found'}), 404
-        
-        # Mark as uploaded
-        file_metadata[file_id]['uploaded'] = True
-        
-        # Generate share link
-        share_link = f"/share/{file_id}"
+        if not result['success']:
+            return jsonify({'error': result['error']}), 500
         
         return jsonify({
-            'shareLink': share_link,
-            'fileId': file_id,
-            'expiresAt': file_metadata[file_id]['expires_at']
+            'success': True,
+            'files': result['files'],
+            'count': len(result['files'])
         })
         
     except Exception as e:
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
+        return jsonify({'error': f'Failed to list files: {str(e)}'}), 500
 
-@upload_bp.route('/upload/download/<file_id>', methods=['GET'])
-@download_rate_limit
-def get_download_url(file_id):
-    """Generate presigned URL for file download"""
+@upload_bp.route('/files/<file_id>', methods=['DELETE'])
+@require_auth
+@api_rate_limit
+def delete_file(file_id):
+    """Delete a file"""
     try:
-        if file_id not in file_metadata:
+        user_id = request.current_user_id
+        
+        # Find the file by ID (we need to search through user's files)
+        files_result = minio_client.list_user_files(user_id, 1000)
+        if not files_result['success']:
+            return jsonify({'error': 'Failed to find file'}), 500
+        
+        # Find the file with matching ID
+        target_file = None
+        for file_info in files_result['files']:
+            if file_info['file_id'] == file_id:
+                target_file = file_info
+                break
+        
+        if not target_file:
             return jsonify({'error': 'File not found'}), 404
         
-        metadata = file_metadata[file_id]
+        # Delete the file
+        delete_result = minio_client.delete_file(target_file['object_key'], user_id)
         
-        # Check if file has expired
-        expires_at = datetime.fromisoformat(metadata['expires_at'])
-        if datetime.utcnow() > expires_at:
-            return jsonify({'error': 'File has expired'}), 410
+        if not delete_result['success']:
+            return jsonify({'error': delete_result['error']}), 500
         
-        if not metadata['uploaded']:
-            return jsonify({'error': 'File upload not completed'}), 400
+        return jsonify({
+            'success': True,
+            'message': 'File deleted successfully',
+            'file_id': file_id
+        })
         
-        # Generate presigned URL for download
-        download_url = r2_client.generate_presigned_url(
-            'get_object',
-            Params={
-                'Bucket': R2_BUCKET_NAME,
-                'Key': metadata['key'],
-                'ResponseContentDisposition': f'attachment; filename="{metadata["original_name"]}"'
-            },
-            ExpiresIn=600  # 10 minutes to download
+    except Exception as e:
+        return jsonify({'error': f'Delete failed: {str(e)}'}), 500
+
+@upload_bp.route('/share/<file_id>', methods=['GET'])
+@api_rate_limit
+def get_shared_file(file_id):
+    """Get shared file information (public endpoint)"""
+    try:
+        # Search for the file across all users (this is not efficient for large scale)
+        # In production, you'd want a database to map file_id to object_key
+        
+        # For now, we'll implement a simple search
+        # This is a limitation of the current design - we need the object key to get file info
+        
+        return jsonify({
+            'error': 'File lookup by ID not implemented yet. Use direct object key instead.'
+        }), 501
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to get file info: {str(e)}'}), 500
+
+@upload_bp.route('/download/<path:object_key>', methods=['GET'])
+@api_rate_limit
+def download_file(object_key):
+    """Download a file (public endpoint with optional password)"""
+    try:
+        password = request.args.get('password', '')
+        
+        download_result = minio_client.download_file(
+            object_key=object_key,
+            password=password if password else None
         )
         
+        if not download_result['success']:
+            if 'Password required' in download_result['error']:
+                return jsonify({
+                    'error': download_result['error'],
+                    'password_required': True
+                }), 401
+            return jsonify({'error': download_result['error']}), 400
+        
         return jsonify({
-            'downloadUrl': download_url,
-            'fileName': metadata['original_name'],
-            'fileSize': metadata['file_size'],
-            'expiresAt': metadata['expires_at']
+            'success': True,
+            'download_url': download_result['download_url'],
+            'filename': download_result['filename'],
+            'size': download_result['size'],
+            'content_type': download_result['content_type']
         })
         
-    except ClientError as e:
-        return jsonify({'error': f'R2 error: {str(e)}'}), 500
     except Exception as e:
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
+        return jsonify({'error': f'Download failed: {str(e)}'}), 500
 
-@upload_bp.route('/upload/info/<file_id>', methods=['GET'])
+@upload_bp.route('/file-info/<path:object_key>', methods=['GET'])
 @api_rate_limit
-def get_file_info(file_id):
-    """Get file information"""
+def get_file_info(object_key):
+    """Get file information (public endpoint)"""
     try:
-        if file_id not in file_metadata:
-            return jsonify({'error': 'File not found'}), 404
+        file_info = minio_client.get_file_info(object_key)
         
-        metadata = file_metadata[file_id]
+        if not file_info['success']:
+            return jsonify({'error': file_info['error']}), 404
         
-        # Check if file has expired
-        expires_at = datetime.fromisoformat(metadata['expires_at'])
-        if datetime.utcnow() > expires_at:
-            return jsonify({'error': 'File has expired'}), 410
-        
+        # Return public information only
         return jsonify({
-            'fileId': file_id,
-            'fileName': metadata['original_name'],
-            'fileSize': metadata['file_size'],
-            'fileType': metadata['file_type'],
-            'expiresAt': metadata['expires_at'],
-            'uploaded': metadata['uploaded']
+            'success': True,
+            'filename': file_info['filename'],
+            'size': file_info['size'],
+            'content_type': file_info['content_type'],
+            'upload_time': file_info['upload_time'],
+            'expiry_time': file_info['expiry_time'],
+            'has_password': file_info['has_password']
         })
         
     except Exception as e:
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
+        return jsonify({'error': f'Failed to get file info: {str(e)}'}), 500
 
-@upload_bp.route('/upload/cleanup', methods=['POST'])
+@upload_bp.route('/storage-stats', methods=['GET'])
+@require_auth
+@api_rate_limit
+def get_storage_stats():
+    """Get storage statistics for the current user"""
+    try:
+        user_id = request.current_user_id
+        
+        # Get user's files
+        files_result = minio_client.list_user_files(user_id, 1000)
+        if not files_result['success']:
+            return jsonify({'error': files_result['error']}), 500
+        
+        # Calculate user statistics
+        total_files = len(files_result['files'])
+        total_size = sum(file_info['size'] for file_info in files_result['files'])
+        
+        # Get global stats (admin only - for now return user stats)
+        global_stats = minio_client.get_storage_stats()
+        
+        return jsonify({
+            'success': True,
+            'user_stats': {
+                'total_files': total_files,
+                'total_size': total_size,
+                'total_size_mb': round(total_size / (1024 * 1024), 2)
+            },
+            'global_stats': global_stats if global_stats['success'] else None
+        })
+        
+    except Exception as e:
+        return jsonify({'error': f'Failed to get stats: {str(e)}'}), 500
+
+@upload_bp.route('/cleanup-expired', methods=['POST'])
+@require_auth
+@api_rate_limit
 def cleanup_expired_files():
-    """Clean up expired files (call this periodically)"""
+    """Clean up expired files (admin function)"""
     try:
-        current_time = datetime.utcnow()
-        expired_files = []
+        # In a real app, you'd check if user is admin
+        # For now, any authenticated user can trigger cleanup
         
-        for file_id, metadata in list(file_metadata.items()):
-            expires_at = datetime.fromisoformat(metadata['expires_at'])
-            if current_time > expires_at:
-                # Delete from R2
-                try:
-                    r2_client.delete_object(
-                        Bucket=R2_BUCKET_NAME,
-                        Key=metadata['key']
-                    )
-                except ClientError:
-                    pass  # File might not exist in R2
-                
-                # Remove from metadata
-                expired_files.append(file_id)
-                del file_metadata[file_id]
+        cleanup_result = minio_client.cleanup_expired_files()
+        
+        if not cleanup_result['success']:
+            return jsonify({'error': cleanup_result['error']}), 500
         
         return jsonify({
-            'message': f'Cleaned up {len(expired_files)} expired files',
-            'expired_files': expired_files
+            'success': True,
+            'message': f"Cleaned up {cleanup_result['deleted_count']} expired files"
         })
         
     except Exception as e:
-        return jsonify({'error': f'Server error: {str(e)}'}), 500
-
+        return jsonify({'error': f'Cleanup failed: {str(e)}'}), 500

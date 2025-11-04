@@ -3,8 +3,6 @@ import { ArrowRight, ChevronRight, Upload, Wifi, Cloud } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useNavigate } from 'react-router-dom'
 
-import { ModeToggle } from './ModeToggle'
-
 export default function HomePage() {
   const navigate = useNavigate()
 
@@ -18,9 +16,6 @@ export default function HomePage() {
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#8882_1px,transparent_1px),linear-gradient(to_bottom,#8882_1px,transparent_1px)] bg-[size:16px_16px] opacity-15"></div>
 
       <div className="container relative z-10 mx-auto px-4 py-24 sm:px-6 lg:px-8 lg:py-32">
-        <div className="absolute top-8 right-8">
-          <ModeToggle />
-        </div>
         <div className="mx-auto max-w-5xl">
           {/* Badge */}
           <motion.div

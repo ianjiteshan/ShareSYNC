@@ -35,21 +35,25 @@ const buttonVariants = cva(
   }
 )
 
-function Button({
+// ... (imports and cva variants stay the same) ...
+
+const Button = React.forwardRef(({ // <-- 1. Wrap in React.forwardRef
   className,
   variant,
   size,
   asChild = false,
   ...props
-}) {
+}, ref) => { // <-- ref is now a parameter
   const Comp = asChild ? Slot : "button"
 
   return (
     <Comp
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
+      ref={ref} // <-- 2. Pass the ref here
       {...props} />
   );
-}
+})
+Button.displayName = "Button" // <-- Add this for better debugging
 
 export { Button, buttonVariants }
