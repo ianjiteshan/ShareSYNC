@@ -10,7 +10,7 @@ import mimetypes
 class MinIOClient:
     def __init__(self):
         # MinIO configuration
-        self.endpoint_url = os.getenv('MINIO_ENDPOINT', 'http://localhost:9000')
+        self.endpoint_url = os.getenv('MINIO_ENDPOINT', 'http://127.0.0.1:9000')
         self.access_key = os.getenv('MINIO_ACCESS_KEY', 'minioadmin')
         self.secret_key = os.getenv('MINIO_SECRET_KEY', 'minioadmin')
         self.bucket_name = os.getenv('MINIO_BUCKET', 'sharesync-files')

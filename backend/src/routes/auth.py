@@ -6,8 +6,6 @@ from authlib.integrations.flask_client import OAuth
 from authlib.common.errors import AuthlibBaseError
 import requests
 from ..middleware.rate_limiter import api_rate_limit, strict_rate_limit
-from ..models.database import db
-from ..models import User 
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -35,8 +33,8 @@ def init_oauth(app):
     return google
 
 # In-memory user storage (use database in production)
-# users_db = {}
-# sessions_db = {}
+users_db = {}
+sessions_db = {}
 
 @auth_bp.route('/auth/login', methods=['GET'])
 @strict_rate_limit
@@ -81,28 +79,32 @@ def callback():
             print(f"Missing required fields: user_id={user_id}, email={email}")
             return jsonify({'error': 'Invalid user information from Google'}), 400
         
-        # Find or create user in the database
-        user = User.query.filter_by(google_id=user_id).first()
-
-        if not user:
-            # Create a new user if they don't exist
-            user = User(
-                google_id=user_id,
-                email=email,
-                name=name,
-                picture=picture
-            )
-            db.session.add(user)
-        else:
-            # Update existing user's info
-            user.name = name
-            user.picture = picture
-
-        db.session.commit()
-
-        # Use the database User ID for the session
-        session['user_id'] = user.id
-
+        # Store user in database
+        users_db[user_id] = {
+            'id': user_id,
+            'email': email,
+            'name': name,
+            'picture': picture,
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'updated_at': datetime.now(timezone.utc).isoformat()
+        }
+        
+        # Create session
+        session_token = f"session_{user_id}_{datetime.now(timezone.utc).timestamp()}"
+        
+        # CRITICAL FIX: Correctly calculate session expiry time
+        session_expires = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        
+        sessions_db[session_token] = {
+            'user_id': user_id,
+            'expires_at': session_expires,
+            'created_at': datetime.now(timezone.utc).isoformat()
+        }
+        
+        # Set session cookie
+        session['user_id'] = user_id
+        session['session_token'] = session_token
+        
         # Redirect to upload page
         return redirect('http://localhost:5173/upload')
         
@@ -226,4 +228,3 @@ def require_auth(f):
         return f(*args, **kwargs)
     
     return decorated_function
-

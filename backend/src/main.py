@@ -42,8 +42,17 @@ db_dir = os.path.join(basedir, 'database')
 # Create the directory if it doesn't exist
 os.makedirs(db_dir, exist_ok=True)
 # Configuration
+
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'sharesync.db')}")
+if os.getenv('FLASK_ENV') == 'development':
+    print("Running in Development: Setting SESSION_COOKIE_SECURE = False")
+    app.config['SESSION_COOKIE_SECURE'] = False
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+else:
+    print("Running in Production: Setting SESSION_COOKIE_SECURE = True")
+    app.config['SESSION_COOKIE_SECURE'] = True
+    app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
 
@@ -51,7 +60,7 @@ app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
 db = init_db(app)
 
 # Enable CORS for all routes
-CORS(app, origins="*", supports_credentials=True)
+CORS(app, origins="", supports_credentials=True)
 
 # Initialize rate limiter with Redis support
 redis_url = os.getenv('REDIS_URL', 'memory://')
