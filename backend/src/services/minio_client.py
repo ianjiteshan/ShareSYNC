@@ -380,5 +380,34 @@ class MinIOClient:
         except Exception as e:
             return {'success': False, 'error': f'Failed to get stats: {str(e)}'}
 
+    def find_file_by_id(self, file_id):
+        """
+        Searches for a file by its file_id across all objects.
+        NOTE: This is highly inefficient and should be replaced by a database lookup.
+        """
+        try:
+            # List all objects in the bucket
+            paginator = self.s3_client.get_paginator('list_objects_v2')
+            pages = paginator.paginate(Bucket=self.bucket_name)
+            
+            for page in pages:
+                for content in page.get('Contents', []):
+                    object_key = content['Key']
+                    # Use head_object to get metadata and check file_id
+                    try:
+                        response = self.s3_client.head_object(Bucket=self.bucket_name, Key=object_key)
+                        metadata = response.get('Metadata', {})
+                        
+                        if metadata.get('file-id') == file_id:
+                            return {'success': True, 'object_key': object_key}
+                    except ClientError as e:
+                        # Ignore if object is not found or other head_object error
+                        pass
+            
+            return {'success': False, 'error': 'File not found'}
+            
+        except Exception as e:
+            return {'success': False, 'error': f'Search failed: {str(e)}'}
+
 # Global MinIO client instance
 minio_client = MinIOClient()

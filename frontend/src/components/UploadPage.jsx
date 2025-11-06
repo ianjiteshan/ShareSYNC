@@ -31,7 +31,8 @@ export default function UploadPage() {
   const [selectedExpiry, setSelectedExpiry] = useState(EXPIRY_OPTIONS[0])
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadResult, setUploadResult] = useState(null)
-  const { token } = useAuth()
+  const [qrCodeImage, setQrCodeImage] = useState(null)
+  const { isAuthenticated } = useAuth()
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault()
@@ -68,15 +69,15 @@ export default function UploadPage() {
       setUploadProgress(0)
 
       // Simulate upload progress
-      const interval = setInterval(() => {
-        setUploadProgress(prev => {
-          if (prev >= 90) {
-            clearInterval(interval)
-            return 90
-          }
-          return prev + 10
-        })
-      }, 200)
+      // const interval = setInterval(() => {
+      //   setUploadProgress(prev => {
+      //     if (prev >= 90) {
+      //       clearInterval(interval)
+      //       return 90
+      //     }
+      //     return prev + 10
+      //   })
+      // }, 200)
 
       const formData = new FormData()
       formData.append('file', selectedFile)
@@ -84,7 +85,7 @@ export default function UploadPage() {
 
       const xhr = new XMLHttpRequest()
       xhr.open('POST', '/api/upload', true)
-      xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+      xhr.withCredentials = true
 
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
@@ -102,6 +103,9 @@ export default function UploadPage() {
           setUploadResult(result)
           setSelectedFile(null)
           setError(null)
+          
+          // Fetch QR code
+          fetchQrCode(result.file_id)
         } else {
           const errorResponse = JSON.parse(xhr.responseText)
           setError(errorResponse.error || 'Upload failed due to a server error.')
@@ -130,6 +134,20 @@ export default function UploadPage() {
       console.error('Upload error:', error)
       setError('Upload failed. Please try again.')
       setIsUploading(false)
+    }
+  }
+
+  const fetchQrCode = async (fileId) => {
+    try {
+      const response = await fetch(`/api/qr-code/${fileId}`)
+      const data = await response.json()
+      if (data.success) {
+        setQrCodeImage(`data:image/png;base64,${data.qr_code_base64}`)
+      } else {
+        console.error('Failed to fetch QR code:', data.error)
+      }
+    } catch (error) {
+      console.error('Network error fetching QR code:', error)
     }
   }
 
@@ -171,6 +189,13 @@ export default function UploadPage() {
           <Card className="bg-black/40 border-gray-700/50 backdrop-blur-sm">
             <CardContent className="p-6 space-y-6">
               <h2 className="text-xl font-medium text-white">Upload Successful!</h2>
+              
+              {qrCodeImage && (
+                <div className="flex flex-col items-center space-y-3 p-4 bg-gray-800/50 rounded-lg">
+                  <p className="text-sm font-medium text-gray-300">Scan to Download</p>
+                  <img src={qrCodeImage} alt="QR Code" className="w-32 h-32 p-2 bg-white rounded-md" />
+                </div>
+              )}
               <div className="space-y-2">
                 <p className="text-gray-400">File: <span className="text-white font-medium">{uploadResult.filename}</span></p>
                 <p className="text-gray-400">Size: <span className="text-white font-medium">{formatFileSize(uploadResult.size)}</span></p>
@@ -199,7 +224,10 @@ export default function UploadPage() {
               </div>
 
               <Button
-                onClick={() => setUploadResult(null)}
+                onClick={() => {
+                  setUploadResult(null)
+                  setQrCodeImage(null)
+                }}
                 className="w-full bg-gray-700 hover:bg-gray-600 text-white"
               >
                 Upload Another File
@@ -361,6 +389,5 @@ export default function UploadPage() {
       </div>
     </div>
   )
-    
 }
 

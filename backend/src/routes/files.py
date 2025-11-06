@@ -343,7 +343,7 @@ def set_file_password(file_id):
     except Exception as e:
         return jsonify({'error': f'Password update failed: {str(e)}'}), 500
 
-@files_bp.route('/my-files', methods=['GET'])
+@files_bp.route('/files', methods=['GET'])
 @require_auth
 @api_rate_limit
 def get_user_files():

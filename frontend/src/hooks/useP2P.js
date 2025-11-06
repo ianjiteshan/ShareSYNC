@@ -21,6 +21,8 @@ const useP2P = () => {
   const [sessionId, setSessionId] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('disconnected');
   const [transferProgress, setTransferProgress] = useState({});
+  const fileChunksRef = useRef({}); // To store incoming file chunks
+  const fileInfoRef = useRef({}); // To store incoming file metadata
   const [error, setError] = useState(null);
 
   const socketRef = useRef(null);
@@ -31,10 +33,18 @@ const useP2P = () => {
  
 
   // WebRTC configuration
+  // Using a public STUN server and a placeholder TURN server for demonstration.
+  // Replace with your actual TURN server credentials.
   const rtcConfig = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:stun1.l.google.com:19302' }
+      { urls: 'stun:stun1.l.google.com:19302' },
+      // Placeholder for TURN server (replace with your own)
+      {
+      urls: 'turn:192.168.0.104:3478', 
+      username: 'sharesync',
+      credential: 'secretpass'
+    }
     ]
   };
 
@@ -45,7 +55,7 @@ const useP2P = () => {
     try {
       socketRef.current = io('http://localhost:5001', {
         transports: ['websocket', 'polling']
-      });
+      } );
 
       socketRef.current.on('connect', () => {
         console.log('Connected to signaling server');
@@ -123,34 +133,99 @@ const useP2P = () => {
     });
   }, []);
 
+  // Helper function to trigger file download
+  const downloadFile = useCallback((file, fileName) => {
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, []);
+
   // Handle data channel messages
-  // THIS IS NOW *BEFORE* createPeerConnection
   const handleDataChannelMessage = useCallback((event, senderId) => {
+    // WebRTC DataChannel can send ArrayBuffer directly, so we check the type
+    if (event.data instanceof ArrayBuffer) {
+      // This is a file chunk
+      const chunk = event.data;
+      const fileInfo = fileInfoRef.current[senderId];
+
+      if (!fileInfo) {
+        console.warn('Received file chunk before file info from', senderId);
+        return;
+      }
+
+      // Store the chunk
+      if (!fileChunksRef.current[senderId]) {
+        fileChunksRef.current[senderId] = [];
+      }
+      fileChunksRef.current[senderId].push(chunk);
+
+      // Update progress
+      setTransferProgress(prev => {
+        const currentReceived = (prev[senderId]?.received || 0) + chunk.byteLength;
+        const total = fileInfo.fileSize;
+        return {
+          ...prev,
+          [senderId]: {
+            ...prev[senderId],
+            received: currentReceived,
+            progress: (currentReceived / total) * 100
+          }
+        };
+      });
+
+      return;
+    }
+
+    // Otherwise, it's a JSON message (file info, complete, etc.)
     try {
       const data = JSON.parse(event.data);
       
       switch (data.type) {
         case 'file_info':
-          console.log('Receiving file:', data.fileName, 'from', senderId);
-          // Handle file info
-          break;
-          
-        case 'file_chunk':
-          console.log('Received file chunk from', senderId);
-          // Handle file chunk
+          console.log('Receiving file:', data.fileName, 'size:', data.fileSize, 'from', senderId);
+          fileInfoRef.current[senderId] = data;
+          fileChunksRef.current[senderId] = []; // Clear any previous chunks
           setTransferProgress(prev => ({
             ...prev,
             [senderId]: {
-              ...prev[senderId],
-              received: (prev[senderId]?.received || 0) + data.chunk.length,
-              progress: ((prev[senderId]?.received || 0) + data.chunk.length) / (prev[senderId]?.total || 1) * 100
+              fileName: data.fileName,
+              total: data.fileSize,
+              received: 0,
+              progress: 0
             }
           }));
           break;
           
         case 'file_complete':
-          console.log('File transfer complete from', senderId);
-          // Handle file completion
+          console.log('File transfer complete from', senderId, '. Reassembling file...');
+          
+          const info = fileInfoRef.current[senderId];
+          const chunks = fileChunksRef.current[senderId];
+
+          if (info && chunks) {
+            // Reassemble the file
+            const file = new Blob(chunks, { type: info.fileType });
+            
+            // Trigger download
+            downloadFile(file, info.fileName);
+
+            // Clean up
+            delete fileInfoRef.current[senderId];
+            delete fileChunksRef.current[senderId];
+            setTransferProgress(prev => {
+              const newProgress = { ...prev };
+              delete newProgress[senderId];
+              return newProgress;
+            });
+
+          } else {
+            console.error('Missing file info or chunks for completion from', senderId);
+          }
           break;
           
         default:
@@ -159,7 +234,7 @@ const useP2P = () => {
     } catch (error) {
       console.error('Failed to handle data channel message:', error);
     }
-  }, []);
+  }, [downloadFile]);
 
   // Create peer connection
   // ADDED isInitiator flag
@@ -399,14 +474,8 @@ const useP2P = () => {
       reader.onload = (event) => {
         const chunk = event.target.result;
         
-        const chunkData = {
-          type: 'file_chunk',
-          chunk: Array.from(new Uint8Array(chunk)),
-          offset: offset,
-          isLast: offset + chunk.byteLength >= file.size
-        };
-
-        dataChannel.send(JSON.stringify(chunkData));
+        // Send the raw ArrayBuffer directly, which is more efficient and reliable
+        dataChannel.send(chunk);
         
         offset += chunk.byteLength;
         

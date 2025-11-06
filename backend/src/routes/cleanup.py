@@ -33,14 +33,17 @@ def cleanup_expired_files():
         
         for file_record in expired_files:
             try:
-                # Mark file as deleted in database
-                file_record.mark_deleted()
-                cleaned_count += 1
+                # Delete from MinIO storage
+                from ..services.minio_client import minio_client
+                delete_result = minio_client.delete_file(file_record.storage_key)
                 
-                # TODO: Delete from R2 storage
-                # This would require R2 client integration
-                # r2_client.delete_object(Bucket=R2_BUCKET_NAME, Key=file_record.storage_key)
-                storage_cleaned += 1
+                if delete_result['success']:
+                    storage_cleaned += 1
+                    # Mark file as deleted in database
+                    file_record.mark_deleted()
+                    cleaned_count += 1
+                else:
+                    print(f"Error deleting from MinIO {file_record.storage_key}: {delete_result['error']}")
                 
                 print(f"Cleaned up file: {file_record.original_name} (ID: {file_record.id})")
                 
@@ -202,10 +205,15 @@ def force_delete_file(file_id):
             # TODO: Implement admin check
             return jsonify({'error': 'Access denied'}), 403
         
-        # Mark as deleted
-        file_record.mark_deleted()
+        # Delete from MinIO storage
+        from ..services.minio_client import minio_client
+        delete_result = minio_client.delete_file(file_record.storage_key)
         
-        # TODO: Delete from R2 storage
+        if not delete_result['success']:
+            return jsonify({'error': f"Failed to delete from storage: {delete_result['error']}"}), 500
+        
+        # Mark as deleted in database
+        file_record.mark_deleted()
         
         return jsonify({
             'message': 'File deleted successfully',

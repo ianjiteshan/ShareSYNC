@@ -189,6 +189,6 @@ def strict_rate_limit(f):
     return advanced_limiter.rate_limit({
         'per_ip': {'limit': 10, 'window': 600},  # 10 requests per 10 minutes per IP
         'per_user': {'limit': 50, 'window': 600},  # 50 requests per 10 minutes per user
-        'anonymous': {'limit': 2, 'window': 600}  # 2 requests per 10 minutes for anonymous
+        'anonymous': {'limit': 20, 'window': 600}  # 2 requests per 10 minutes for anonymous //temp i will change it back to 2
     })(f)
 

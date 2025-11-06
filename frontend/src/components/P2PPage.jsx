@@ -22,6 +22,10 @@ const P2PPage = () => {
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef(null);
   const [showTransferModal, setShowTransferModal] = useState(false);
+  
+  // --- ADDED ---
+  // This state tracks which peer we are *currently* trying to connect to
+  const [connectingTo, setConnectingTo] = useState(null);
 
   // Handle file selection
   const handleFileSelect = (files) => {
@@ -50,13 +54,16 @@ const P2PPage = () => {
     }
   };
 
+  // --- UPDATED ---
   // Send file to selected peer
   const handleSendFile = async (peerId, file) => {
+    setConnectingTo(peerId); // Set connecting state
     try {
       // First connect to peer if not already connected
       const connected = await connectToPeer(peerId);
       if (!connected) {
         alert('Failed to connect to peer');
+        setConnectingTo(null); // Clear state on failure
         return;
       }
 
@@ -71,6 +78,7 @@ const P2PPage = () => {
       console.error('Error sending file:', error);
       alert('Error sending file');
     }
+    setConnectingTo(null); // Clear state on success/finish
   };
 
   // Format file size
@@ -263,67 +271,86 @@ const P2PPage = () => {
 
               {peers.length > 0 && (
                 <div className="space-y-3">
-                  {peers.map((peer) => (
-                    <div
-                      key={peer.session_id}
-                      className="bg-white/5 rounded-xl p-4 border border-white/10 hover:bg-white/10 transition-all duration-300"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <h3 className="text-white font-semibold">{peer.device_name}</h3>
-                          <p className="text-white/60 text-sm">
-                            Status: {peer.connectionState || 'Available'}
-                          </p>
-                          <p className="text-white/40 text-xs">
-                            Joined: {new Date(peer.joined_at).toLocaleTimeString()}
-                          </p>
-                        </div>
-                        
-                        <div className="flex flex-col gap-2">
-                          {selectedFiles.length > 0 ? (
-                            <div className="space-y-1">
-                              {selectedFiles.map((file, index) => (
-                                <button
-                                  key={index}
-                                  disabled={!peer.dataChannelReady}
-                                  onClick={() => handleSendFile(peer.session_id, file)}
-                                  className={`bg-gradient-to-r from-blue-500 to-purple-600 text-white px-3 py-1 rounded-lg text-sm font-medium transition-all duration-300 flex items-center gap-1 ${
-                                    !peer.dataChannelReady ? 'opacity-50 cursor-not-allowed' : 'hover:from-blue-600 hover:to-purple-700'
-                                  }`}
-                                >
-                                  <Upload className="w-3 h-3" />
-                                  {peer.dataChannelReady ? `Send ${file.name.substring(0, 15)}...` : 'Connecting...'}
-                                
-                                </button>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className="text-white/40 text-sm">Select files to send</span>
-                          )}
-                        </div>
-                      </div>
+                  {peers.map((peer) => {
+                    
+                    // --- UPDATED ---
+                    // Define button states for clarity
+                    const isConnecting = connectingTo === peer.session_id;
+                    const isSending = !!transferProgress[peer.session_id];
+                    const isDisabled = isConnecting || isSending;
 
-                      {/* Transfer Progress */}
-                      {transferProgress[peer.session_id] && (
-                        <div className="mt-3 p-2 bg-white/5 rounded-lg">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-white/80 text-sm">
-                              Sending: {transferProgress[peer.session_id].fileName}
-                            </span>
-                            <span className="text-white/60 text-sm">
-                              {Math.round(transferProgress[peer.session_id].progress)}%
-                            </span>
+                    return (
+                      <div
+                        key={peer.session_id}
+                        className="bg-white/5 rounded-xl p-4 border border-white/10 hover:bg-white/10 transition-all duration-300"
+                      >
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h3 className="text-white font-semibold">{peer.device_name}</h3>
+                            <p className="text-white/60 text-sm">
+                              Status: {peer.connectionState || 'Available'}
+                            </p>
+                            <p className="text-white/40 text-xs">
+                              Joined: {new Date(peer.joined_at).toLocaleTimeString()}
+                            </p>
                           </div>
-                          <div className="w-full bg-white/10 rounded-full h-2">
-                            <div
-                              className="bg-gradient-to-r from-blue-500 to-purple-600 h-2 rounded-full transition-all duration-300"
-                              style={{ width: `${transferProgress[peer.session_id].progress}%` }}
-                            ></div>
+                          
+                          <div className="flex flex-col gap-2">
+                            {selectedFiles.length > 0 ? (
+                              <div className="space-y-1">
+                                {selectedFiles.map((file, index) => (
+                                  <button
+                                    key={index}
+                                    disabled={isDisabled}
+                                    onClick={() => handleSendFile(peer.session_id, file)}
+                                    className={`bg-gradient-to-r from-blue-500 to-purple-600 text-white px-3 py-1 rounded-lg text-sm font-medium transition-all duration-300 flex items-center gap-1 ${
+                                      isDisabled ? 'opacity-50 cursor-not-allowed' : 'hover:from-blue-600 hover:to-purple-700'
+                                    }`}
+                                  >
+                                    <Upload className="w-3 h-3" />
+                                    
+                                    {/* --- UPDATED --- */}
+                                    {/* This is the new button text logic */}
+                                    {isConnecting
+                                      ? 'Connecting...'
+                                      : isSending
+                                      ? 'Sending...'
+                                      : peer.dataChannelReady
+                                      ? `Send ${file.name.substring(0, 15)}...`
+                                      : `Connect & Send`}
+                                  
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-white/40 text-sm">Select files to send</span>
+                            )}
                           </div>
                         </div>
-                      )}
-                    </div>
-                  ))}
+
+                        {/* Transfer Progress */}
+                        {transferProgress[peer.session_id] && (
+                          <div className="mt-3 p-2 bg-white/5 rounded-lg">
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="text-white/80 text-sm">
+                                {transferProgress[peer.session_id].sent ? 'Sending: ' : 'Receiving: '} 
+                                {transferProgress[peer.session_id].fileName}
+                              </span>
+                              <span className="text-white/60 text-sm">
+                                {Math.round(transferProgress[peer.session_id].progress)}%
+                              </span>
+                            </div>
+                            <div className="w-full bg-white/10 rounded-full h-2">
+                              <div
+                                className="bg-gradient-to-r from-blue-500 to-purple-600 h-2 rounded-full transition-all duration-300"
+                                style={{ width: `${transferProgress[peer.session_id].progress}%` }}
+                              ></div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>

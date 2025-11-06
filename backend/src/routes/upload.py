@@ -4,6 +4,9 @@ from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
 from werkzeug.utils import secure_filename
 import hashlib
+import qrcode
+import base64
+from io import BytesIO
 
 from .auth import require_auth
 from ..middleware.rate_limiter import api_rate_limit, upload_rate_limit
@@ -35,7 +38,7 @@ def get_file_size(file_obj):
 
 @upload_bp.route('/upload', methods=['POST'])
 @require_auth
-@upload_rate_limit
+#@upload_rate_limit
 def upload_file():
     """Upload a file to MinIO storage"""
     try:
@@ -180,12 +183,35 @@ def get_shared_file(file_id):
         # Search for the file across all users (this is not efficient for large scale)
         # In production, you'd want a database to map file_id to object_key
         
-        # For now, we'll implement a simple search
-        # This is a limitation of the current design - we need the object key to get file info
+        # This is a temporary, inefficient solution. In a production app,
+        # a database should map file_id to object_key for fast lookup.
         
+        # Search for the file by ID across all users (up to 1000 files total)
+        search_result = minio_client.find_file_by_id(file_id)
+        
+        if not search_result['success']:
+            return jsonify({'error': search_result['error']}), 404
+        
+        object_key = search_result['object_key']
+        
+        # Now get the file info
+        file_info = minio_client.get_file_info(object_key)
+        
+        if not file_info['success']:
+            return jsonify({'error': file_info['error']}), 404
+        
+        # Return public information only
         return jsonify({
-            'error': 'File lookup by ID not implemented yet. Use direct object key instead.'
-        }), 501
+            'success': True,
+            'file_id': file_id,
+            'filename': file_info['filename'],
+            'size': file_info['size'],
+            'content_type': file_info['content_type'],
+            'upload_time': file_info['upload_time'],
+            'expiry_time': file_info['expiry_time'],
+            'has_password': file_info['has_password'],
+            'object_key': object_key # Return object_key for the frontend to use in download
+        })
         
     except Exception as e:
         return jsonify({'error': f'Failed to get file info: {str(e)}'}), 500
@@ -277,6 +303,50 @@ def get_storage_stats():
         
     except Exception as e:
         return jsonify({'error': f'Failed to get stats: {str(e)}'}), 500
+
+@upload_bp.route('/qr-code/<file_id>', methods=['GET'])
+@api_rate_limit
+def generate_qr_code(file_id):
+    """Generate a QR code for the shared file link"""
+    try:
+        # This is a temporary, inefficient solution. In a production app,
+        # a database should map file_id to object_key for fast lookup.
+        search_result = minio_client.find_file_by_id(file_id)
+        
+        if not search_result['success']:
+            return jsonify({'error': search_result['error']}), 404
+        
+        # Construct the full share URL (assuming the frontend is served from the root)
+        share_url = f"{request.host_url.rstrip('/')}/share/{file_id}"
+        
+        # Generate QR code
+        qr = qrcode.QRCode(
+            version=1,
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        qr.add_data(share_url)
+        qr.make(fit=True)
+
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Save to a byte buffer
+        buffer = BytesIO()
+        img.save(buffer, format="PNG")
+        
+        # Encode to base64
+        qr_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+        
+        return jsonify({
+            'success': True,
+            'qr_code_base64': qr_base64,
+            'share_url': share_url
+        })
+        
+    except Exception as e:
+        print(f"QR code generation failed: {e}")
+        return jsonify({'error': f'QR code generation failed: {str(e)}'}), 500
 
 @upload_bp.route('/cleanup-expired', methods=['POST'])
 @require_auth
