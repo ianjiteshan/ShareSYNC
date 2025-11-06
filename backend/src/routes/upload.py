@@ -11,6 +11,8 @@ from io import BytesIO
 from .auth import require_auth
 from ..middleware.rate_limiter import api_rate_limit, upload_rate_limit
 from ..services.minio_client import minio_client
+from ..models.file import File
+from ..models.database import db
 
 upload_bp = Blueprint('upload', __name__)
 
@@ -38,7 +40,7 @@ def get_file_size(file_obj):
 
 @upload_bp.route('/upload', methods=['POST'])
 @require_auth
-#@upload_rate_limit
+@upload_rate_limit
 def upload_file():
     """Upload a file to MinIO storage"""
     try:
@@ -89,21 +91,42 @@ def upload_file():
         if not upload_result['success']:
             return jsonify({'error': upload_result['error']}), 500
         
+        # CRITICAL FIX: Save file metadata to database
+        try:
+            file_record = File.create_file(
+                user_id=user_id,
+                file_data={
+                    'original_name': upload_result['filename'],
+                    'file_type': upload_result['content_type'],
+                    'file_size': upload_result['size'],
+                    'storage_key': upload_result['object_key'],
+                    'password': password if password else None
+                },
+                expiry_hours=expiry_hours
+            )
+            file_record.upload_status = 'completed'
+            db.session.commit()
+        except Exception as db_e:
+            # If database save fails, attempt to delete from MinIO to prevent orphan
+            minio_client.delete_file(upload_result['object_key'])
+            print(f"Database save failed, MinIO file deleted: {db_e}")
+            return jsonify({'error': 'Upload failed due to database error.'}), 500
+        
         # Generate share URL
-        share_url = f"/share/{upload_result['file_id']}"
+        share_url = f"/share/{file_record.id}"
         
         return jsonify({
             'success': True,
-            'file_id': upload_result['file_id'],
-            'filename': upload_result['filename'],
-            'size': upload_result['size'],
-            'content_type': upload_result['content_type'],
+            'file_id': file_record.id,
+            'filename': file_record.original_name,
+            'size': file_record.file_size,
+            'content_type': file_record.file_type,
             'share_url': share_url,
-            'download_url': upload_result['download_url'],
+            'download_url': upload_result['download_url'], # This is a temporary presigned URL, but we'll use the download route
             'public_url': upload_result['public_url'],
-            'expiry_time': upload_result['expiry_time'],
-            'has_password': upload_result['has_password'],
-            'upload_time': upload_result['upload_time']
+            'expiry_time': file_record.expires_at.isoformat(),
+            'has_password': bool(file_record.password_hash),
+            'upload_time': file_record.created_at.isoformat()
         })
         
     except Exception as e:
@@ -114,7 +137,7 @@ def upload_file():
 @require_auth
 @api_rate_limit
 def list_user_files():
-    """List files uploaded by the current user"""
+    """List files uploaded by the current user (using database)"""
     try:
         user_id = request.current_user_id
         limit = int(request.args.get('limit', 50))
@@ -123,15 +146,12 @@ def list_user_files():
         if limit < 1 or limit > 100:
             limit = 50
         
-        result = minio_client.list_user_files(user_id, limit)
-        
-        if not result['success']:
-            return jsonify({'error': result['error']}), 500
+        files = File.query.filter_by(user_id=user_id, is_deleted=False).limit(limit).all()
         
         return jsonify({
             'success': True,
-            'files': result['files'],
-            'count': len(result['files'])
+            'files': [file.to_dict() for file in files],
+            'count': len(files)
         })
         
     except Exception as e:
@@ -141,30 +161,23 @@ def list_user_files():
 @require_auth
 @api_rate_limit
 def delete_file(file_id):
-    """Delete a file"""
+    """Delete a file (using database)"""
     try:
         user_id = request.current_user_id
         
-        # Find the file by ID (we need to search through user's files)
-        files_result = minio_client.list_user_files(user_id, 1000)
-        if not files_result['success']:
-            return jsonify({'error': 'Failed to find file'}), 500
+        file_record = File.query.filter_by(id=file_id, user_id=user_id, is_deleted=False).first()
         
-        # Find the file with matching ID
-        target_file = None
-        for file_info in files_result['files']:
-            if file_info['file_id'] == file_id:
-                target_file = file_info
-                break
+        if not file_record:
+            return jsonify({'error': 'File not found or unauthorized'}), 404
         
-        if not target_file:
-            return jsonify({'error': 'File not found'}), 404
-        
-        # Delete the file
-        delete_result = minio_client.delete_file(target_file['object_key'], user_id)
+        # Delete the file from MinIO
+        delete_result = minio_client.delete_file(file_record.storage_key)
         
         if not delete_result['success']:
             return jsonify({'error': delete_result['error']}), 500
+        
+        # Mark as deleted in database
+        file_record.mark_deleted()
         
         return jsonify({
             'success': True,
@@ -178,39 +191,27 @@ def delete_file(file_id):
 @upload_bp.route('/share/<file_id>', methods=['GET'])
 @api_rate_limit
 def get_shared_file(file_id):
-    """Get shared file information (public endpoint)"""
+    """Get shared file information (public endpoint, using database)"""
     try:
-        # Search for the file across all users (this is not efficient for large scale)
-        # In production, you'd want a database to map file_id to object_key
+        file_record = File.query.filter_by(id=file_id, is_deleted=False).first()
         
-        # This is a temporary, inefficient solution. In a production app,
-        # a database should map file_id to object_key for fast lookup.
+        if not file_record:
+            return jsonify({'error': 'File not found or has been deleted/expired'}), 404
         
-        # Search for the file by ID across all users (up to 1000 files total)
-        search_result = minio_client.find_file_by_id(file_id)
-        
-        if not search_result['success']:
-            return jsonify({'error': search_result['error']}), 404
-        
-        object_key = search_result['object_key']
-        
-        # Now get the file info
-        file_info = minio_client.get_file_info(object_key)
-        
-        if not file_info['success']:
-            return jsonify({'error': file_info['error']}), 404
+        if file_record.is_expired():
+            return jsonify({'error': 'File has expired'}), 404
         
         # Return public information only
         return jsonify({
             'success': True,
-            'file_id': file_id,
-            'filename': file_info['filename'],
-            'size': file_info['size'],
-            'content_type': file_info['content_type'],
-            'upload_time': file_info['upload_time'],
-            'expiry_time': file_info['expiry_time'],
-            'has_password': file_info['has_password'],
-            'object_key': object_key # Return object_key for the frontend to use in download
+            'file_id': file_record.id,
+            'filename': file_record.original_name,
+            'size': file_record.file_size,
+            'content_type': file_record.file_type,
+            'upload_time': file_record.created_at.isoformat(),
+            'expiry_time': file_record.expires_at.isoformat(),
+            'has_password': bool(file_record.password_hash),
+            'object_key': file_record.storage_key # Return object_key for the frontend to use in download
         })
         
     except Exception as e:
@@ -219,29 +220,37 @@ def get_shared_file(file_id):
 @upload_bp.route('/download/<path:object_key>', methods=['GET'])
 @api_rate_limit
 def download_file(object_key):
-    """Download a file (public endpoint with optional password)"""
+    """Download a file (public endpoint with optional password, using database)"""
     try:
         password = request.args.get('password', '')
         
-        download_result = minio_client.download_file(
-            object_key=object_key,
-            password=password if password else None
-        )
+        file_record = File.query.filter_by(storage_key=object_key, is_deleted=False).first()
         
-        if not download_result['success']:
-            if 'Password required' in download_result['error']:
-                return jsonify({
-                    'error': download_result['error'],
-                    'password_required': True
-                }), 401
-            return jsonify({'error': download_result['error']}), 400
+        if not file_record:
+            return jsonify({'error': 'File not found or has been deleted/expired'}), 404
+        
+        if file_record.is_expired():
+            return jsonify({'error': 'File has expired'}), 404
+        
+        # Check password
+        if file_record.password_hash and not file_record.check_password(password):
+            return jsonify({
+                'error': 'Password required or invalid password',
+                'password_required': True
+            }), 401
+        
+        # Generate presigned URL
+        download_url = minio_client.generate_presigned_url(object_key)
+        
+        # Increment download count
+        file_record.increment_download_count()
         
         return jsonify({
             'success': True,
-            'download_url': download_result['download_url'],
-            'filename': download_result['filename'],
-            'size': download_result['size'],
-            'content_type': download_result['content_type']
+            'download_url': download_url,
+            'filename': file_record.original_name,
+            'size': file_record.file_size,
+            'content_type': file_record.file_type
         })
         
     except Exception as e:
@@ -307,14 +316,12 @@ def get_storage_stats():
 @upload_bp.route('/qr-code/<file_id>', methods=['GET'])
 @api_rate_limit
 def generate_qr_code(file_id):
-    """Generate a QR code for the shared file link"""
+    """Generate a QR code for the shared file link (using database)"""
     try:
-        # This is a temporary, inefficient solution. In a production app,
-        # a database should map file_id to object_key for fast lookup.
-        search_result = minio_client.find_file_by_id(file_id)
+        file_record = File.query.filter_by(id=file_id, is_deleted=False).first()
         
-        if not search_result['success']:
-            return jsonify({'error': search_result['error']}), 404
+        if not file_record:
+            return jsonify({'error': 'File not found or has been deleted/expired'}), 404
         
         # Construct the full share URL (assuming the frontend is served from the root)
         share_url = f"{request.host_url.rstrip('/')}/share/{file_id}"

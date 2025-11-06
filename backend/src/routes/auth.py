@@ -6,6 +6,8 @@ from authlib.integrations.flask_client import OAuth
 from authlib.common.errors import AuthlibBaseError
 import requests
 from ..middleware.rate_limiter import api_rate_limit, strict_rate_limit
+from ..models.database import db
+from ..models import User 
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -33,8 +35,8 @@ def init_oauth(app):
     return google
 
 # In-memory user storage (use database in production)
-users_db = {}
-sessions_db = {}
+# users_db = {}
+# sessions_db = {}
 
 @auth_bp.route('/auth/login', methods=['GET'])
 @strict_rate_limit
@@ -79,43 +81,34 @@ def callback():
             print(f"Missing required fields: user_id={user_id}, email={email}")
             return jsonify({'error': 'Invalid user information from Google'}), 400
         
-        # Store user in database
-        users_db[user_id] = {
-            'id': user_id,
-            'email': email,
-            'name': name,
-            'picture': picture,
-            'created_at': datetime.now(timezone.utc).isoformat(),
-            'updated_at': datetime.now(timezone.utc).isoformat()
-        }
-        
-        # Create session
-        session_token = f"session_{user_id}_{datetime.now(timezone.utc).timestamp()}"
-        
-        # --- FIX IS HERE ---
-        # 1. Calculate the future datetime object first
-        session_expires_dt = datetime.now(timezone.utc) + timedelta(days=7)
-        
-        sessions_db[session_token] = {
-            'user_id': user_id,
-            # 2. Now convert the *new* datetime object to a string for storage
-            'expires_at': session_expires_dt.isoformat(), 
-            'created_at': datetime.now(timezone.utc).isoformat()
-        }
-        
-        # Set session cookie
-        session['user_id'] = user_id
-        session['session_token'] = session_token
-        
-        # Redirect to upload page (or your frontend's main page)
-        # Ensure this URL is correct for your local setup
-        return redirect(os.getenv('FRONTEND_URL', 'http://localhost:5173/upload'))
+        # Find or create user in the database
+        user = User.query.filter_by(google_id=user_id).first()
+
+        if not user:
+            # Create a new user if they don't exist
+            user = User(
+                google_id=user_id,
+                email=email,
+                name=name,
+                picture=picture
+            )
+            db.session.add(user)
+        else:
+            # Update existing user's info
+            user.name = name
+            user.picture = picture
+
+        db.session.commit()
+
+        # Use the database User ID for the session
+        session['user_id'] = user.id
+
+        # Redirect to upload page
+        return redirect('http://localhost:5173/upload')
         
     except AuthlibBaseError as e:
-        print(f"Authlib error: {str(e)}")
         return jsonify({'error': f'OAuth error: {str(e)}'}), 400
     except Exception as e:
-        print(f"Callback processing error: {str(e)}")
         return jsonify({'error': f'Callback processing failed: {str(e)}'}), 500
 
 @auth_bp.route('/auth/logout', methods=['POST'])
@@ -148,17 +141,11 @@ def get_user():
         # Check session validity
         if session_token not in sessions_db:
             session.clear()
-            return jsonify({'error': 'Session expired or invalid'}), 401
+            return jsonify({'error': 'Session expired'}), 401
         
         session_data = sessions_db[session_token]
-        
-        # Safely parse the ISO string
-        try:
-            expires_at = datetime.fromisoformat(session_data['expires_at'])
-        except (ValueError, TypeError):
-            session.clear()
-            return jsonify({'error': 'Invalid session data'}), 401
-
+        # CRITICAL FIX: Ensure datetime objects are timezone-aware for comparison
+        expires_at = datetime.fromisoformat(session_data['expires_at'])
         
         if datetime.now(timezone.utc) > expires_at:
             del sessions_db[session_token]
@@ -182,7 +169,6 @@ def get_user():
         })
         
     except Exception as e:
-        print(f"User fetch error: {str(e)}")
         return jsonify({'error': f'User fetch failed: {str(e)}'}), 500
 
 @auth_bp.route('/auth/status', methods=['GET'])
@@ -201,12 +187,8 @@ def auth_status():
             return jsonify({'authenticated': False})
         
         session_data = sessions_db[session_token]
-        
-        # Safely parse the ISO string
-        try:
-            expires_at = datetime.fromisoformat(session_data['expires_at'])
-        except (ValueError, TypeError):
-            return jsonify({'authenticated': False})
+        # CRITICAL FIX: Ensure datetime objects are timezone-aware for comparison
+        expires_at = datetime.fromisoformat(session_data['expires_at'])
         
         if datetime.now(timezone.utc) > expires_at:
             return jsonify({'authenticated': False})
@@ -214,7 +196,6 @@ def auth_status():
         return jsonify({'authenticated': True, 'user_id': user_id})
         
     except Exception as e:
-        print(f"Auth status error: {str(e)}")
         return jsonify({'error': f'Status check failed: {str(e)}'}), 500
 
 def require_auth(f):
@@ -231,15 +212,11 @@ def require_auth(f):
         
         # Check session validity
         if session_token not in sessions_db:
-            return jsonify({'error': 'Session expired or invalid'}), 401
+            return jsonify({'error': 'Session expired'}), 401
         
         session_data = sessions_db[session_token]
-        
-        # Safely parse the ISO string
-        try:
-            expires_at = datetime.fromisoformat(session_data['expires_at'])
-        except (ValueError, TypeError):
-            return jsonify({'error': 'Invalid session data'}), 401
+        # CRITICAL FIX: Ensure datetime objects are timezone-aware for comparison
+        expires_at = datetime.fromisoformat(session_data['expires_at'])
         
         if datetime.now(timezone.utc) > expires_at:
             return jsonify({'error': 'Session expired'}), 401
@@ -249,3 +226,4 @@ def require_auth(f):
         return f(*args, **kwargs)
     
     return decorated_function
+

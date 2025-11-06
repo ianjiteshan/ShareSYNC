@@ -31,10 +31,11 @@ def cleanup_expired_files():
         cleaned_count = 0
         storage_cleaned = 0
         
+        from ..services.minio_client import minio_client
+        
         for file_record in expired_files:
             try:
                 # Delete from MinIO storage
-                from ..services.minio_client import minio_client
                 delete_result = minio_client.delete_file(file_record.storage_key)
                 
                 if delete_result['success']:
@@ -43,7 +44,10 @@ def cleanup_expired_files():
                     file_record.mark_deleted()
                     cleaned_count += 1
                 else:
+                    # If MinIO deletion fails, log it but still mark as deleted in DB to prevent repeated attempts
                     print(f"Error deleting from MinIO {file_record.storage_key}: {delete_result['error']}")
+                    file_record.mark_deleted() # Mark as deleted to stop repeated attempts
+                    cleaned_count += 1
                 
                 print(f"Cleaned up file: {file_record.original_name} (ID: {file_record.id})")
                 
@@ -210,9 +214,10 @@ def force_delete_file(file_id):
         delete_result = minio_client.delete_file(file_record.storage_key)
         
         if not delete_result['success']:
-            return jsonify({'error': f"Failed to delete from storage: {delete_result['error']}"}), 500
+            # Log error but proceed to mark as deleted in DB to prevent repeated attempts
+            print(f"Error deleting from MinIO {file_record.storage_key}: {delete_result['error']}")
         
-        # Mark as deleted in database
+        # Mark as deleted in database regardless of MinIO result
         file_record.mark_deleted()
         
         return jsonify({

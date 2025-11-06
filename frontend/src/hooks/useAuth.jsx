@@ -14,6 +14,7 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [token, setToken] = useState(null)
 
   useEffect(() => {
     checkAuthStatus()
@@ -34,6 +35,10 @@ export const AuthProvider = ({ children }) => {
         
         if (userData.user) {
           setUser(userData.user)
+          // CRITICAL FIX: Assume the backend returns the token with user data
+          // If the backend is session-based, this token will be null, and we'll rely on cookies.
+          // If the backend is JWT-based, this is where we get the token.
+          setToken(userData.token || null) 
           setIsAuthenticated(true)
         }
       }
@@ -55,6 +60,7 @@ export const AuthProvider = ({ children }) => {
         credentials: 'include'
       })
       setUser(null)
+      setToken(null)
       setIsAuthenticated(false)
       window.location.href = '/'
     } catch (error) {
@@ -66,6 +72,7 @@ export const AuthProvider = ({ children }) => {
     user,
     isLoading,
     isAuthenticated,
+    token, // CRITICAL FIX: Expose the token
     login,
     logout,
     checkAuthStatus

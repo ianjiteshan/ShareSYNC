@@ -32,7 +32,7 @@ export default function UploadPage() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadResult, setUploadResult] = useState(null)
   const [qrCodeImage, setQrCodeImage] = useState(null)
-  const { isAuthenticated } = useAuth()
+  const { token } = useAuth()
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault()
@@ -68,16 +68,7 @@ export default function UploadPage() {
       setIsUploading(true)
       setUploadProgress(0)
 
-      // Simulate upload progress
-      // const interval = setInterval(() => {
-      //   setUploadProgress(prev => {
-      //     if (prev >= 90) {
-      //       clearInterval(interval)
-      //       return 90
-      //     }
-      //     return prev + 10
-      //   })
-      // }, 200)
+      // Removed simulated upload progress, relying solely on xhr.upload.onprogress
 
       const formData = new FormData()
       formData.append('file', selectedFile)
@@ -85,7 +76,7 @@ export default function UploadPage() {
 
       const xhr = new XMLHttpRequest()
       xhr.open('POST', '/api/upload', true)
-      xhr.withCredentials = true
+      xhr.withCredentials = true;
 
       xhr.upload.onprogress = (event) => {
         if (event.lengthComputable) {
