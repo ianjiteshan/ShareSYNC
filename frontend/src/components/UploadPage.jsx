@@ -32,7 +32,7 @@ export default function UploadPage() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [uploadResult, setUploadResult] = useState(null)
   const [qrCodeImage, setQrCodeImage] = useState(null)
-  const { token } = useAuth()
+	  const { isAuthenticated } = useAuth()
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault()
@@ -61,14 +61,16 @@ export default function UploadPage() {
     }
   }
 
+  // NOTE: The original code used XMLHttpRequest which is difficult to integrate with React state and modern async/await.
+  // The original XHR logic also contained a redundant Promise wrapper that would not resolve correctly.
+  // We will revert to a standard fetch/XHR approach for progress tracking, but simplify the surrounding logic.
   const handleUpload = async () => {
     if (!selectedFile || !selectedExpiry) return
 
     try {
       setIsUploading(true)
       setUploadProgress(0)
-
-      // Removed simulated upload progress, relying solely on xhr.upload.onprogress
+      setError(null)
 
       const formData = new FormData()
       formData.append('file', selectedFile)
@@ -85,45 +87,42 @@ export default function UploadPage() {
         }
       }
 
-      xhr.onload = () => {
-        setIsUploading(false)
-        setUploadProgress(100)
-        
-        if (xhr.status === 200) {
-          const result = JSON.parse(xhr.responseText)
-          setUploadResult(result)
-          setSelectedFile(null)
-          setError(null)
+      const result = await new Promise((resolve, reject) => {
+        xhr.onload = () => {
+          setIsUploading(false)
+          setUploadProgress(100)
           
-          // Fetch QR code
-          fetchQrCode(result.file_id)
-        } else {
-          const errorResponse = JSON.parse(xhr.responseText)
-          setError(errorResponse.error || 'Upload failed due to a server error.')
-        }
-      }
-
-      xhr.onerror = () => {
-        setIsUploading(false)
-        setError('Network error or server is unreachable.')
-      }
-
-      xhr.send(formData)
-      
-      // Keep the component waiting for the XHR to complete
-      await new Promise((resolve, reject) => {
-        xhr.onloadend = () => {
-          if (xhr.status === 200) {
-            resolve()
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              resolve(JSON.parse(xhr.responseText))
+            } catch (e) {
+              reject(new Error('Invalid response from server.'))
+            }
           } else {
-            reject(new Error(xhr.responseText))
+            try {
+              const errorResponse = JSON.parse(xhr.responseText)
+              reject(new Error(errorResponse.error || `Upload failed with status ${xhr.status}`))
+            } catch (e) {
+              reject(new Error(`Upload failed with status ${xhr.status}`))
+            }
           }
         }
-      })
 
-    } catch (error) {
-      console.error('Upload error:', error)
-      setError('Upload failed. Please try again.')
+        xhr.onerror = () => {
+          setIsUploading(false)
+          reject(new Error('Network error or server is unreachable.'))
+        }
+
+        xhr.send(formData)
+      })
+      
+      setUploadResult(result)
+      setSelectedFile(null)
+      fetchQrCode(result.file_id)
+
+    } catch (err) {
+      console.error('Upload error:', err)
+      setError(err.message || 'Upload failed. Please try again.')
       setIsUploading(false)
     }
   }
@@ -144,7 +143,17 @@ export default function UploadPage() {
 
 
   return (
-    <div className="min-h-screen w-full relative">
+	    <div className="min-h-screen w-full relative">
+	      {/* CRITICAL FIX: Redirect unauthenticated users to auth page */}
+	      {!isAuthenticated && !isUploading && (
+	        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+	          <Card className="p-8 text-center">
+	            <h2 className="text-xl font-semibold mb-4">Authentication Required</h2>
+	            <p className="mb-6 text-gray-500">Please sign in to use cloud upload functionality.</p>
+	            <Button onClick={() => navigate('/auth')}>Go to Sign In</Button>
+	          </Card>
+	        </div>
+	      )}
       {/* Background Effects */}
       <div className="fixed inset-0 -z-50">
         <div className="absolute inset-0 opacity-40" 

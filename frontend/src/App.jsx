@@ -1,7 +1,7 @@
 import React from "react";
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, useLocation } from "react-router-dom";
 import { AuthProvider } from "./hooks/useAuth.jsx";
-import { ThemeProvider } from "./components/ThemeProvider";  // <-- from 00App.jsx
+import { ThemeProvider } from "./components/ThemeProvider";
 
 // Pages
 import HomePage from "./components/HomePage";
@@ -9,16 +9,40 @@ import UploadPage from "./components/UploadPage";
 import P2PPage from "./components/P2PPage";
 import AuthPage from "./components/AuthPage";
 import AnalyticsDashboard from "./components/AnalyticsDashboard";
-import FilesPage from "./components/FilesPage";          // ✅ new
-import DownloadPage from "./components/DownloadPage";    // ✅ new
+import FilesPage from "./components/FilesPage";
+import DownloadPage from "./components/DownloadPage";
 import TermsOfService from "./components/TermsOfService";
 import PrivacyPolicy from "./components/PrivacyPolicy";
 import Footer from "./components/Footer";
 import ProtectedRoute from "./components/ProtectedRoute";
 import CloudQuickNav from "./components/CloudQuickNav";
 
-
 import "./App.css";
+
+function Layout({ children }) {
+  const location = useLocation();
+
+  // Pages where footer should NOT show
+  const hideFooterPaths = [
+    "/terms",
+    "/privacy",
+    "/auth",
+    "/dashboard",
+    "/files",
+  ];
+
+  // Match share/ANY_ID
+  const hideFooter =
+    hideFooterPaths.includes(location.pathname) ||
+    location.pathname.startsWith("/share/");
+
+  return (
+    <>
+      {children}
+      {!hideFooter && <Footer />}
+    </>
+  );
+}
 
 function App() {
   return (
@@ -27,7 +51,7 @@ function App() {
         <Router>
           <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex flex-col">
 
-            {/* Background Effects (from your original App.jsx) */}
+            {/* Background Effects */}
             <div className="fixed inset-0 -z-50">
               <div
                 className="absolute inset-0 opacity-40"
@@ -39,68 +63,60 @@ function App() {
               <div className="absolute inset-0 bg-black/40"></div>
             </div>
 
-            {/* Main Content */}
             <div className="flex-1">
-              <Routes>
-                <Route path="/" element={<HomePage />} />
-                <Route path="/auth" element={<AuthPage />} />
-                <Route path="/terms" element={<TermsOfService />} />
-                <Route path="/privacy" element={<PrivacyPolicy />} />
+              <Layout>
+                <Routes>
+                  {/* Public */}
+                  <Route path="/" element={<HomePage />} />
+                  <Route path="/auth" element={<AuthPage />} />
+                  <Route path="/terms" element={<TermsOfService />} />
+                  <Route path="/privacy" element={<PrivacyPolicy />} />
 
-                {/* ✅ PUBLIC DOWNLOAD PAGE SUPPORT */}
-                <Route path="/share/:fileId" element={<DownloadPage />} />
+                  {/* ⭐ PUBLIC SHARE/DOWNLOAD PAGE */}
+                  <Route path="/share/:fileId" element={<DownloadPage />} />
 
-                {/* ✅ PROTECTED ROUTES */}
-                <Route
-                  path="/upload"
-                  element={
-                    <ProtectedRoute>
-                      <UploadPage />
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-  path="/cloud"
-  element={
-    <ProtectedRoute>
-      <CloudQuickNav />
-    </ProtectedRoute>
-  }
-/>
+                  {/* Protected */}
+                  <Route
+                    path="/upload"
+                    element={
+                      <ProtectedRoute>
+                        <UploadPage />
+                      </ProtectedRoute>
+                    }
+                  />
 
+                  <Route
+                    path="/cloud"
+                    element={
+                      <ProtectedRoute>
+                        <CloudQuickNav />
+                      </ProtectedRoute>
+                    }
+                  />
 
-                <Route path="/p2p" element={<P2PPage />} />
+                  <Route
+                    path="/dashboard"
+                    element={
+                      <ProtectedRoute>
+                        <AnalyticsDashboard />
+                      </ProtectedRoute>
+                    }
+                  />
 
-                <Route
-                  path="/dashboard"
-                  element={
-                    <ProtectedRoute>
-                      <AnalyticsDashboard />
-                    </ProtectedRoute>
-                  }
-                />
+                  <Route
+                    path="/files"
+                    element={
+                      <ProtectedRoute>
+                        <FilesPage />
+                      </ProtectedRoute>
+                    }
+                  />
 
-                <Route
-                  path="/files"
-                  element={
-                    <ProtectedRoute>
-                      <FilesPage />
-                    </ProtectedRoute>
-                  }
-                />
-              </Routes>
+                  <Route path="/p2p" element={<P2PPage />} />
+                </Routes>
+              </Layout>
             </div>
 
-            {/* Conditional Footer rendering */}
-            <Routes>
-              <Route path="/terms" element={null} />
-              <Route path="/privacy" element={null} />
-              <Route path="/auth" element={null} />
-              <Route path="/dashboard" element={null} />
-              <Route path="/files" element={null} />
-              <Route path="/share/:fileId" element={null} />
-              <Route path="*" element={<Footer />} />
-            </Routes>
           </div>
         </Router>
       </AuthProvider>

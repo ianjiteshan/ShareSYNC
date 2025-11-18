@@ -106,7 +106,8 @@ def callback():
         session['session_token'] = session_token
         
         # Redirect to upload page
-        return redirect('http://localhost:5173/upload')
+        frontend_origin = os.getenv('FRONTEND_ORIGIN', 'http://localhost:5173')
+        return redirect(f'{frontend_origin}/upload')
         
     except AuthlibBaseError as e:
         return jsonify({'error': f'OAuth error: {str(e)}'}), 400

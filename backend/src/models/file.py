@@ -9,7 +9,7 @@ class File(db.Model):
     __tablename__ = 'files'
     
     id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = db.Column(db.String(255), db.ForeignKey('users.id'), nullable=False)
+    user_id = db.Column(db.String(255), db.ForeignKey('users.id'), nullable=True)
     
     # File information
     original_name = db.Column(db.String(500), nullable=False)
