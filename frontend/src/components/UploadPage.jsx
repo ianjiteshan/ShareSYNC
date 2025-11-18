@@ -129,18 +129,19 @@ export default function UploadPage() {
   }
 
   const fetchQrCode = async (fileId) => {
-    try {
-      const response = await fetch(`/api/qr-code/${fileId}`)
-      const data = await response.json()
-      if (data.success) {
-        setQrCodeImage(`data:image/png;base64,${data.qr_code_base64}`)
-      } else {
-        console.error('Failed to fetch QR code:', data.error)
-      }
-    } catch (error) {
-      console.error('Network error fetching QR code:', error)
+  try {
+    const response = await fetch(`/api/files/${fileId}/qr`);
+    if (response.ok) {
+      setQrCodeImage(`/api/files/${fileId}/qr`);
+    } else {
+      console.error('Failed to fetch QR code:', response.statusText);
     }
+  } catch (error) {
+    console.error('Network error fetching QR code:', error);
   }
+}
+
+
 
   return (
     <div className="min-h-screen w-full relative">

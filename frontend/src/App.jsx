@@ -1,5 +1,4 @@
-// ✅ FINAL MERGED APP.JSX (Best UI + All Pages Supported)
-
+import React from "react";
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "./hooks/useAuth.jsx";
 import { ThemeProvider } from "./components/ThemeProvider";  // <-- from 00App.jsx

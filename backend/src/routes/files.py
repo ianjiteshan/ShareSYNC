@@ -11,6 +11,8 @@ from ..models.database import db
 from ..models import User, File, Download
 from .auth import require_auth
 from ..middleware.rate_limiter import upload_rate_limit, download_rate_limit, api_rate_limit
+from ..services.minio_client import minio_client
+
 
 files_bp = Blueprint('files', __name__)
 
@@ -70,7 +72,7 @@ def get_file_info(file_id):
         
         # Generate QR code for sharing
         base_url = request.host_url.rstrip('/')
-        share_url = f"{base_url}/files/{file_id}"
+        share_url = f"{base_url}/share/{file_id}"
         
         file_data = file_record.to_dict()
         file_data.update({
@@ -97,7 +99,7 @@ def generate_qr_code(file_id):
         
         # Generate QR code
         base_url = request.host_url.rstrip('/')
-        share_url = f"{base_url}/files/{file_id}"
+        share_url = f"{base_url}/share/{file_id}"
         
         qr = qrcode.QRCode(
             version=1,
@@ -163,14 +165,13 @@ def download_file(file_id):
             request_data=request_data
         )
         
-        # Generate presigned download URL from R2
-        from .upload import r2_client, R2_BUCKET_NAME
-        
-        download_url = r2_client.generate_presigned_url(
-            'get_object',
-            Params={'Bucket': R2_BUCKET_NAME, 'Key': file_record.storage_key},
-            ExpiresIn=3600  # 1 hour
-        )
+       
+        download_url = minio_client.generate_presigned_url(
+        'get_object',
+        Params={'Bucket': minio_client.bucket_name, 'Key': file_record.storage_key},
+        ExpiresIn=3600  # 1 hour link
+            )
+
         
         # Increment download count
         file_record.increment_download_count()

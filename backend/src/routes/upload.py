@@ -217,44 +217,7 @@ def get_shared_file(file_id):
     except Exception as e:
         return jsonify({'error': f'Failed to get file info: {str(e)}'}), 500
 
-@upload_bp.route('/download/<path:object_key>', methods=['GET'])
-@api_rate_limit
-def download_file(object_key):
-    """Download a file (public endpoint with optional password, using database)"""
-    try:
-        password = request.args.get('password', '')
-        
-        file_record = File.query.filter_by(storage_key=object_key, is_deleted=False).first()
-        
-        if not file_record:
-            return jsonify({'error': 'File not found or has been deleted/expired'}), 404
-        
-        if file_record.is_expired():
-            return jsonify({'error': 'File has expired'}), 404
-        
-        # Check password
-        if file_record.password_hash and not file_record.check_password(password):
-            return jsonify({
-                'error': 'Password required or invalid password',
-                'password_required': True
-            }), 401
-        
-        # Generate presigned URL
-        download_url = minio_client.generate_presigned_url(object_key)
-        
-        # Increment download count
-        file_record.increment_download_count()
-        
-        return jsonify({
-            'success': True,
-            'download_url': download_url,
-            'filename': file_record.original_name,
-            'size': file_record.file_size,
-            'content_type': file_record.file_type
-        })
-        
-    except Exception as e:
-        return jsonify({'error': f'Download failed: {str(e)}'}), 500
+
 
 @upload_bp.route('/file-info/<path:object_key>', methods=['GET'])
 @api_rate_limit

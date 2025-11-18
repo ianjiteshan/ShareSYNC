@@ -79,61 +79,35 @@ export default function DownloadPage() {
   }
 
   const handleDownload = async () => {
-    try {
-      setIsDownloading(true)
-      setDownloadError(null)
-      
-      const url = `/api/download/${fileInfo.storage_key || fileId}`
-      const params = new URLSearchParams()
-      
-      if (password) {
-        params.append('password', password)
-      }
-      
-      const downloadUrl = params.toString() ? `${url}?${params}` : url
-      
-      const response = await fetch(downloadUrl, {
-        credentials: 'include'
-      })
-      
-      if (!response.ok) {
-        if (response.status === 401) {
-          throw new Error('Incorrect password')
-        }
-        if (response.status === 404) {
-          throw new Error('File not found')
-        }
-        throw new Error('Download failed')
-      }
-      
-      // Get filename from Content-Disposition header or use original name
-      const contentDisposition = response.headers.get('Content-Disposition')
-      let filename = fileInfo.original_name || 'download'
-      
-      if (contentDisposition) {
-        const matches = /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/.exec(contentDisposition)
-        if (matches != null && matches[1]) {
-          filename = matches[1].replace(/['"]/g, '')
-        }
-      }
-      
-      // Download the file
-      const blob = await response.blob()
-      const blobUrl = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = blobUrl
-      a.download = filename
-      document.body.appendChild(a)
-      a.click()
-      window.URL.revokeObjectURL(blobUrl)
-      document.body.removeChild(a)
-    } catch (err) {
-      console.error('Download error:', err)
-      setDownloadError(err.message)
-    } finally {
-      setIsDownloading(false)
+  try {
+    setIsDownloading(true);
+    setDownloadError(null);
+
+    const response = await fetch(`/api/files/${fileId}/download`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify(password ? { password } : {})
+    });
+
+    if (!response.ok) {
+      throw new Error("Invalid password or file access denied");
     }
+
+    const data = await response.json();
+
+    if (data.download_url) {
+      window.location.href = data.download_url;  // redirect to MinIO/S3 link
+    } else {
+      throw new Error("Download URL missing from server");
+    }
+  } catch (err) {
+    setDownloadError(err.message);
+  } finally {
+    setIsDownloading(false);
   }
+}
+
 
   // Check if file is expired
   const isExpired = fileInfo && new Date(fileInfo.expires_at) < new Date()
